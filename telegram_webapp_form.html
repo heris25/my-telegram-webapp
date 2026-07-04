@@ -16,12 +16,20 @@
         .del { background: #e74c3c; color: #fff; border: none; padding: 6px 10px;
                border-radius: 4px; }
         .add-box { margin-top: 16px; padding: 12px; border: 1px solid #ccc; border-radius: 6px; }
-        .add-box input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
         .add-box label { display: block; margin-top: 8px; font-weight: bold; }
-        button.primary { margin-top: 8px; padding: 10px 16px; width: 100%; font-size: 15px; }
+        .field { display: flex; gap: 6px; margin-top: 4px; }
+        .field input { flex: 1; padding: 8px; box-sizing: border-box; }
+        .field button { padding: 8px 12px; white-space: nowrap; }
+        button.primary { margin-top: 12px; padding: 10px 16px; width: 100%; font-size: 15px; }
         #save { margin-top: 20px; padding: 14px; width: 100%; font-size: 16px;
                 background: #2ecc71; color: #fff; border: none; border-radius: 6px; }
         .empty { color: #888; padding: 8px 0; }
+        .candidates { margin-top: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .candidates .cand { padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
+        .candidates .cand:last-child { border-bottom: none; }
+        .candidates .cand:hover { background: #f0f8ff; }
+        .status { margin-top: 6px; font-size: 0.85em; color: #888; }
+        .status.error { color: #e74c3c; }
     </style>
 </head>
 <body>
@@ -30,13 +38,28 @@
 
     <div class="add-box">
         <strong>종목 추가</strong>
+
         <label for="iscd">종목코드 (iscd)</label>
-        <input type="text" id="iscd" placeholder="예: 005930">
+        <div class="field">
+            <input type="text" id="iscd" placeholder="예: 005930">
+            <button onclick="lookupByCode()">확인</button>
+        </div>
+
         <label for="name">종목명 (name)</label>
-        <input type="text" id="name" placeholder="예: 삼성전자">
+        <div class="field">
+            <input type="text" id="name" placeholder="예: 삼성전자">
+            <button onclick="searchByName()">찾기</button>
+        </div>
+
+        <div id="candidates" class="candidates" style="display:none"></div>
+
         <label for="exchange">거래소 (exchange)</label>
-        <input type="text" id="exchange" placeholder="예: KRX" value="KRX">
+        <div class="field">
+            <input type="text" id="exchange" placeholder="예: KRX" value="KRX">
+        </div>
+
         <button class="primary" onclick="addRow()">➕ 추가</button>
+        <div id="status" class="status"></div>
     </div>
 
     <button id="save" onclick="save()">💾 저장</button>
@@ -45,10 +68,16 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // 봇이 URL의 ?data= 로 실어 보낸 현재 국내 목록을 파싱.
+        // 봇이 URL의 ?data= 로 실어 보낸 현재 국내 목록.
         // 형식: {"columns": [...], "rows": [ {행 dict}, ... ]}
         let columns = [];
         let rows = []; // 각 행은 시트 컬럼 전체를 가진 객체(숨은 컬럼 보존).
+
+        // build_domestic_master_json.py가 만든 종목 마스터(브라우저 조회용).
+        let master = [];        // [{iscd, name, market}, ...]
+        let masterByCode = {};  // iscd -> {iscd, name, market}
+
+        const MAX_CANDIDATES = 10;
 
         function loadInitialData() {
             const params = new URLSearchParams(window.location.search);
@@ -61,6 +90,86 @@
             } catch (e) {
                 console.error('data 파싱 실패', e);
             }
+        }
+
+        // 종목 마스터 JSON을 폼과 같은 위치에서 fetch(같은 오리진이라 CORS 없음).
+        function loadMaster() {
+            fetch('./domestic_stocks.json')
+                .then(res => {
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    master = Array.isArray(data) ? data : [];
+                    masterByCode = {};
+                    master.forEach(item => { masterByCode[item.iscd] = item; });
+                    setStatus(`종목 마스터 ${master.length}개 로드됨. 확인/찾기 사용 가능.`);
+                })
+                .catch(e => {
+                    setStatus('종목 마스터를 불러오지 못했습니다. 직접 입력해 추가하세요. (' + e.message + ')', true);
+                });
+        }
+
+        function setStatus(msg, isError) {
+            const el = document.getElementById('status');
+            el.textContent = msg || '';
+            el.className = 'status' + (isError ? ' error' : '');
+        }
+
+        // 확인: 종목코드로 이름을 찾아 name 입력칸을 채운다.
+        function lookupByCode() {
+            const code = document.getElementById('iscd').value.trim();
+            if (!code) { setStatus('종목코드를 입력하세요.', true); return; }
+            const hit = masterByCode[code];
+            if (!hit) { setStatus(`코드 '${code}'에 해당하는 종목을 찾지 못했습니다.`, true); return; }
+            document.getElementById('name').value = hit.name;
+            hideCandidates();
+            setStatus(`확인: ${hit.name} (${hit.market})`);
+        }
+
+        // 찾기: 이름/코드 부분일치로 후보를 최대 MAX_CANDIDATES개 보여준다.
+        function searchByName() {
+            const needle = document.getElementById('name').value.trim().toLowerCase();
+            if (!needle) { setStatus('종목명을 입력하세요.', true); return; }
+            const matched = [];
+            for (const item of master) {
+                const hay = (item.name + ' ' + item.iscd).toLowerCase();
+                if (hay.includes(needle)) {
+                    matched.push(item);
+                    if (matched.length >= MAX_CANDIDATES) break;
+                }
+            }
+            renderCandidates(matched);
+        }
+
+        function renderCandidates(matched) {
+            const box = document.getElementById('candidates');
+            box.innerHTML = '';
+            if (matched.length === 0) {
+                box.style.display = 'none';
+                setStatus('검색 결과가 없습니다.', true);
+                return;
+            }
+            matched.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'cand';
+                div.textContent = `${item.name} · ${item.iscd} (${item.market})`;
+                // 선택하면 코드+이름을 함께 확정.
+                div.onclick = () => {
+                    document.getElementById('iscd').value = item.iscd;
+                    document.getElementById('name').value = item.name;
+                    hideCandidates();
+                    setStatus(`선택: ${item.name} · ${item.iscd}`);
+                };
+                box.appendChild(div);
+            });
+            box.style.display = 'block';
+        }
+
+        function hideCandidates() {
+            const box = document.getElementById('candidates');
+            box.style.display = 'none';
+            box.innerHTML = '';
         }
 
         function render() {
@@ -99,7 +208,7 @@
             const name = document.getElementById('name').value.trim();
             const exchange = document.getElementById('exchange').value.trim();
             if (!iscd || !name) {
-                alert('종목코드와 종목명을 입력해주세요.');
+                setStatus('종목코드와 종목명을 입력해주세요.', true);
                 return;
             }
             // market_key는 domestic으로 고정(봇에서도 강제로 다시 채운다).
@@ -107,6 +216,8 @@
             document.getElementById('iscd').value = '';
             document.getElementById('name').value = '';
             document.getElementById('exchange').value = 'KRX';
+            hideCandidates();
+            setStatus(`추가됨: ${name} · ${iscd}`);
             render();
         }
 
@@ -124,6 +235,7 @@
 
         loadInitialData();
         render();
+        loadMaster();
     </script>
 </body>
 </html>
