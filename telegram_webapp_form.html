@@ -55,7 +55,7 @@
 
         <label for="exchange">거래소 (exchange)</label>
         <div class="field">
-            <input type="text" id="exchange" placeholder="예: KRX" value="KRX">
+            <input type="text" id="exchange" placeholder="확인/찾기로 자동 채움 (예: KOSPI)">
         </div>
 
         <button class="primary" onclick="addRow()">➕ 추가</button>
@@ -123,6 +123,8 @@
             const hit = masterByCode[code];
             if (!hit) { setStatus(`코드 '${code}'에 해당하는 종목을 찾지 못했습니다.`, true); return; }
             document.getElementById('name').value = hit.name;
+            // exchange는 마스터의 상장시장 라벨(KOSPI/KOSDAQ)로 맞춘다(구매 플로우와 동일).
+            document.getElementById('exchange').value = hit.market || '';
             hideCandidates();
             setStatus(`확인: ${hit.name} (${hit.market})`);
         }
@@ -158,6 +160,8 @@
                 div.onclick = () => {
                     document.getElementById('iscd').value = item.iscd;
                     document.getElementById('name').value = item.name;
+                    // exchange도 마스터의 상장시장 라벨(KOSPI/KOSDAQ)로 함께 확정.
+                    document.getElementById('exchange').value = item.market || '';
                     hideCandidates();
                     setStatus(`선택: ${item.name} · ${item.iscd}`);
                 };
@@ -215,7 +219,7 @@
             rows.push({ market_key: 'domestic', iscd: iscd, name: name, exchange: exchange });
             document.getElementById('iscd').value = '';
             document.getElementById('name').value = '';
-            document.getElementById('exchange').value = 'KRX';
+            document.getElementById('exchange').value = '';
             hideCandidates();
             setStatus(`추가됨: ${name} · ${iscd}`);
             render();
