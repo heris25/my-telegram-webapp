@@ -3,48 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>데이터 입력 폼</title>
+    <title>국내 종목 편집</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { font-family: sans-serif; padding: 16px; }
-        label { display: block; margin-top: 12px; font-weight: bold; }
-        input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
-        button { margin-top: 20px; padding: 12px 20px; width: 100%; font-size: 16px; }
+        h2 { margin-top: 0; }
+        ul { list-style: none; padding: 0; }
+        li { display: flex; align-items: center; justify-content: space-between;
+             padding: 8px; border-bottom: 1px solid #ddd; }
+        .info { flex: 1; }
+        .code { color: #888; font-size: 0.85em; }
+        .del { background: #e74c3c; color: #fff; border: none; padding: 6px 10px;
+               border-radius: 4px; }
+        .add-box { margin-top: 16px; padding: 12px; border: 1px solid #ccc; border-radius: 6px; }
+        .add-box input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+        .add-box label { display: block; margin-top: 8px; font-weight: bold; }
+        button.primary { margin-top: 8px; padding: 10px 16px; width: 100%; font-size: 15px; }
+        #save { margin-top: 20px; padding: 14px; width: 100%; font-size: 16px;
+                background: #2ecc71; color: #fff; border: none; border-radius: 6px; }
+        .empty { color: #888; padding: 8px 0; }
     </style>
 </head>
 <body>
-    <h2>정보를 입력해주세요</h2>
+    <h2>국내 종목 목록</h2>
+    <ul id="list"></ul>
 
-    <label for="inputA">항목 A:</label>
-    <input type="text" id="inputA">
+    <div class="add-box">
+        <strong>종목 추가</strong>
+        <label for="iscd">종목코드 (iscd)</label>
+        <input type="text" id="iscd" placeholder="예: 005930">
+        <label for="name">종목명 (name)</label>
+        <input type="text" id="name" placeholder="예: 삼성전자">
+        <label for="exchange">거래소 (exchange)</label>
+        <input type="text" id="exchange" placeholder="예: KRX" value="KRX">
+        <button class="primary" onclick="addRow()">➕ 추가</button>
+    </div>
 
-    <label for="inputB">항목 B:</label>
-    <input type="text" id="inputB">
-
-    <button onclick="sendDataToBot()">봇으로 전송하기</button>
+    <button id="save" onclick="save()">💾 저장</button>
 
     <script>
-        // 텔레그램 웹앱 객체 초기화
         const tg = window.Telegram.WebApp;
-        tg.expand(); // 웹앱을 화면 크기에 맞게 확장
+        tg.expand();
 
-        function sendDataToBot() {
-            const valA = document.getElementById('inputA').value;
-            const valB = document.getElementById('inputB').value;
+        // 봇이 URL의 ?data= 로 실어 보낸 현재 국내 목록을 파싱.
+        // 형식: {"columns": [...], "rows": [ {행 dict}, ... ]}
+        let columns = [];
+        let rows = []; // 각 행은 시트 컬럼 전체를 가진 객체(숨은 컬럼 보존).
 
-            // 빈칸 검사 (UX 향상)
-            if (!valA || !valB) {
-                alert("모든 항목을 입력해주세요.");
+        function loadInitialData() {
+            const params = new URLSearchParams(window.location.search);
+            const raw = params.get('data');
+            if (!raw) return;
+            try {
+                const parsed = JSON.parse(raw);
+                columns = Array.isArray(parsed.columns) ? parsed.columns : [];
+                rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+            } catch (e) {
+                console.error('data 파싱 실패', e);
+            }
+        }
+
+        function render() {
+            const ul = document.getElementById('list');
+            ul.innerHTML = '';
+            if (rows.length === 0) {
+                const li = document.createElement('li');
+                li.className = 'empty';
+                li.textContent = '등록된 국내 종목이 없습니다.';
+                ul.appendChild(li);
                 return;
             }
+            rows.forEach((row, idx) => {
+                const li = document.createElement('li');
 
-            // 데이터를 하나의 문자열로 묶기 (봇이 그대로 echo)
-            const dataString = `A:${valA} / B:${valB}`;
+                const info = document.createElement('div');
+                info.className = 'info';
+                const nameText = row.name || '(이름 없음)';
+                const codeText = [row.iscd, row.exchange].filter(Boolean).join(' · ');
+                info.innerHTML = `<div>${escapeHtml(nameText)}</div>` +
+                                 `<div class="code">${escapeHtml(codeText)}</div>`;
 
-            // 봇 채팅창으로 데이터 전송 및 웹앱 닫기.
-            // 이 값은 봇에 message.web_app_data.data 로 도착한다.
-            tg.sendData(dataString);
+                const del = document.createElement('button');
+                del.className = 'del';
+                del.textContent = '삭제';
+                del.onclick = () => { rows.splice(idx, 1); render(); };
+
+                li.appendChild(info);
+                li.appendChild(del);
+                ul.appendChild(li);
+            });
         }
+
+        function addRow() {
+            const iscd = document.getElementById('iscd').value.trim();
+            const name = document.getElementById('name').value.trim();
+            const exchange = document.getElementById('exchange').value.trim();
+            if (!iscd || !name) {
+                alert('종목코드와 종목명을 입력해주세요.');
+                return;
+            }
+            // market_key는 domestic으로 고정(봇에서도 강제로 다시 채운다).
+            rows.push({ market_key: 'domestic', iscd: iscd, name: name, exchange: exchange });
+            document.getElementById('iscd').value = '';
+            document.getElementById('name').value = '';
+            document.getElementById('exchange').value = 'KRX';
+            render();
+        }
+
+        function save() {
+            // 최종 목록을 봇으로 전송하고 웹앱 닫기.
+            // 봇에는 message.web_app_data.data 로 이 JSON이 도착한다.
+            tg.sendData(JSON.stringify({ rows: rows }));
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text == null ? '' : String(text);
+            return div.innerHTML;
+        }
+
+        loadInitialData();
+        render();
     </script>
 </body>
 </html>
