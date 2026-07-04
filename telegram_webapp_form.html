@@ -9,16 +9,20 @@
         body { font-family: sans-serif; padding: 16px; }
         h2 { margin-top: 0; }
         ul { list-style: none; padding: 0; }
-        li { display: flex; align-items: center; justify-content: space-between;
+        li { display: flex; align-items: center; gap: 8px;
              padding: 8px; border-bottom: 1px solid #ddd; }
-        .info { flex: 1; }
+        .info { flex: 1; min-width: 0; }
+        .info .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .code { color: #888; font-size: 0.85em; }
+        .flags { display: flex; flex-direction: column; font-size: 0.8em; }
+        .flags label { white-space: nowrap; }
         .del { background: #e74c3c; color: #fff; border: none; padding: 6px 10px;
                border-radius: 4px; }
         .add-box { margin-top: 16px; padding: 12px; border: 1px solid #ccc; border-radius: 6px; }
         .add-box label { display: block; margin-top: 8px; font-weight: bold; }
+        .add-box .chk { font-weight: normal; }
         .field { display: flex; gap: 6px; margin-top: 4px; }
-        .field input { flex: 1; padding: 8px; box-sizing: border-box; }
+        .field input[type=text] { flex: 1; padding: 8px; box-sizing: border-box; }
         .field button { padding: 8px 12px; white-space: nowrap; }
         button.primary { margin-top: 12px; padding: 10px 16px; width: 100%; font-size: 15px; }
         #save { margin-top: 20px; padding: 14px; width: 100%; font-size: 16px;
@@ -58,6 +62,9 @@
             <input type="text" id="exchange" placeholder="확인/찾기로 자동 채움">
         </div>
 
+        <label class="chk"><input type="checkbox" id="new-is-used" checked> 사용 (is_used)</label>
+        <label class="chk"><input type="checkbox" id="new-regular-only"> 정규장 전용 (regular_only)</label>
+
         <button class="primary" onclick="addRow()">➕ 추가</button>
         <div id="status" class="status"></div>
     </div>
@@ -69,16 +76,16 @@
         tg.expand();
 
         // 봇이 URL의 ?data= 로 실어 보낸 대상 시장/현재 목록.
-        // 형식: {"market": "domestic"|"overseas", "columns": [...], "rows": [ {행 dict}, ... ]}
+        // 형식: {"market": "domestic"|"overseas", "rows": [ {market_key,exchange,iscd,name,is_used,regular_only}, ... ]}
         let market = 'domestic';
-        let columns = [];
-        let rows = []; // 각 행은 시트 컬럼 전체를 가진 객체(숨은 컬럼 보존).
+        let rows = [];
 
         // build_stock_master_json.py가 만든 종목 마스터(브라우저 조회용).
         let master = [];        // [{iscd, name, market}, ...]
         let masterByCode = {};  // iscd -> {iscd, name, market}
 
         const MAX_CANDIDATES = 10;
+        const TRUTHY = ['true', '1', 'y', 'yes', 't'];
         // 시장별 라벨/마스터 파일/입력 예시.
         const MARKET_CONFIG = {
             domestic: { label: '국장', file: './domestic_stocks.json',
@@ -87,6 +94,10 @@
                         codeHint: '예: AAPL', nameHint: '예: 애플' },
         };
 
+        function truthy(v) {
+            return TRUTHY.includes(String(v == null ? '' : v).trim().toLowerCase());
+        }
+
         function loadInitialData() {
             const params = new URLSearchParams(window.location.search);
             const raw = params.get('data');
@@ -94,7 +105,6 @@
             try {
                 const parsed = JSON.parse(raw);
                 if (parsed.market === 'overseas') market = 'overseas';
-                columns = Array.isArray(parsed.columns) ? parsed.columns : [];
                 rows = Array.isArray(parsed.rows) ? parsed.rows : [];
             } catch (e) {
                 console.error('data 파싱 실패', e);
@@ -192,6 +202,18 @@
             box.innerHTML = '';
         }
 
+        // 행의 불리언 필드 토글용 체크박스(변경 시 해당 행 값을 TRUE/FALSE로 갱신).
+        function makeFlagCheckbox(row, field, labelText) {
+            const label = document.createElement('label');
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = truthy(row[field]);
+            cb.onchange = () => { row[field] = cb.checked ? 'TRUE' : 'FALSE'; };
+            label.appendChild(cb);
+            label.appendChild(document.createTextNode(' ' + labelText));
+            return label;
+        }
+
         function render() {
             const ul = document.getElementById('list');
             ul.innerHTML = '';
@@ -209,8 +231,13 @@
                 info.className = 'info';
                 const nameText = row.name || '(이름 없음)';
                 const codeText = [row.iscd, row.exchange].filter(Boolean).join(' · ');
-                info.innerHTML = `<div>${escapeHtml(nameText)}</div>` +
+                info.innerHTML = `<div class="nm">${escapeHtml(nameText)}</div>` +
                                  `<div class="code">${escapeHtml(codeText)}</div>`;
+
+                const flags = document.createElement('div');
+                flags.className = 'flags';
+                flags.appendChild(makeFlagCheckbox(row, 'is_used', '사용'));
+                flags.appendChild(makeFlagCheckbox(row, 'regular_only', '정규장전용'));
 
                 const del = document.createElement('button');
                 del.className = 'del';
@@ -218,6 +245,7 @@
                 del.onclick = () => { rows.splice(idx, 1); render(); };
 
                 li.appendChild(info);
+                li.appendChild(flags);
                 li.appendChild(del);
                 ul.appendChild(li);
             });
@@ -232,10 +260,19 @@
                 return;
             }
             // market_key는 대상 시장으로 고정(봇에서도 강제로 다시 채운다).
-            rows.push({ market_key: market, iscd: iscd, name: name, exchange: exchange });
+            rows.push({
+                market_key: market,
+                iscd: iscd,
+                name: name,
+                exchange: exchange,
+                is_used: document.getElementById('new-is-used').checked ? 'TRUE' : 'FALSE',
+                regular_only: document.getElementById('new-regular-only').checked ? 'TRUE' : 'FALSE',
+            });
             document.getElementById('iscd').value = '';
             document.getElementById('name').value = '';
             document.getElementById('exchange').value = '';
+            document.getElementById('new-is-used').checked = true;
+            document.getElementById('new-regular-only').checked = false;
             hideCandidates();
             setStatus(`추가됨: ${name} · ${iscd}`);
             render();
