@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>데이터 입력 폼</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+    <h2>정보를 입력해주세요</h2>
+    
+    <label>항목 A:</label><br>
+    <input type="text" id="inputA"><br><br>
+    
+    <label>항목 B:</label><br>
+    <input type="text" id="inputB"><br><br>
+    
+    <button onclick="sendDataToBot()">봇으로 전송하기</button>
+
+    <script>
+        // 텔레그램 웹앱 객체 초기화
+        let tg = window.Telegram.WebApp;
+        tg.expand(); // 웹앱을 화면 크기에 맞게 확장
+
+        function sendDataToBot() {
+            let valA = document.getElementById('inputA').value;
+            let valB = document.getElementById('inputB').value;
+
+            // 빈칸 검사 (UX 향상)
+            if(!valA || !valB) {
+                alert("모든 항목을 입력해주세요.");
+                return;
+            }
+
+            // 데이터를 하나의 문자열(예: JSON 또는 특정 포맷)로 묶기
+            let dataString = `A:${valA} / B:${valB}`;
+            
+            // 봇 채팅창으로 데이터 전송 및 웹앱 닫기
+            tg.sendData(dataString);
+        }
+    </script>
+</body>
+</html>
