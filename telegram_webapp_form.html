@@ -89,9 +89,12 @@
         // 시장별 라벨/마스터 파일/입력 예시.
         const MARKET_CONFIG = {
             domestic: { label: '국장', file: './domestic_stocks.json',
-                        codeHint: '예: 005930', nameHint: '예: 삼성전자' },
+                        codeHint: '예: 005930', nameHint: '예: 삼성전자',
+                        defaultRegularOnly: false },
+            // 미장은 추가 시 regular_only 기본 ON.
             overseas: { label: '미장', file: './overseas_stocks.json',
-                        codeHint: '예: AAPL', nameHint: '예: 애플' },
+                        codeHint: '예: AAPL', nameHint: '예: 애플',
+                        defaultRegularOnly: true },
         };
 
         function truthy(v) {
@@ -116,6 +119,8 @@
             document.getElementById('title').textContent = `${cfg.label} 종목 목록`;
             document.getElementById('iscd').placeholder = cfg.codeHint;
             document.getElementById('name').placeholder = cfg.nameHint;
+            // 추가용 regular_only 기본값을 시장별로 설정(미장은 ON).
+            document.getElementById('new-regular-only').checked = cfg.defaultRegularOnly;
         }
 
         // 대상 시장의 종목 마스터 JSON을 폼과 같은 위치에서 fetch(같은 오리진이라 CORS 없음).
@@ -272,7 +277,7 @@
             document.getElementById('name').value = '';
             document.getElementById('exchange').value = '';
             document.getElementById('new-is-used').checked = true;
-            document.getElementById('new-regular-only').checked = false;
+            document.getElementById('new-regular-only').checked = MARKET_CONFIG[market].defaultRegularOnly;
             hideCandidates();
             setStatus(`추가됨: ${name} · ${iscd}`);
             render();
