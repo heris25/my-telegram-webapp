@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>국내 종목 편집</title>
+    <title>관리 종목 편집</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { font-family: sans-serif; padding: 16px; }
@@ -33,7 +33,7 @@
     </style>
 </head>
 <body>
-    <h2>국내 종목 목록</h2>
+    <h2 id="title">관리 종목 목록</h2>
     <ul id="list"></ul>
 
     <div class="add-box">
@@ -55,7 +55,7 @@
 
         <label for="exchange">거래소 (exchange)</label>
         <div class="field">
-            <input type="text" id="exchange" placeholder="확인/찾기로 자동 채움 (예: KOSPI)">
+            <input type="text" id="exchange" placeholder="확인/찾기로 자동 채움">
         </div>
 
         <button class="primary" onclick="addRow()">➕ 추가</button>
@@ -68,16 +68,24 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // 봇이 URL의 ?data= 로 실어 보낸 현재 국내 목록.
-        // 형식: {"columns": [...], "rows": [ {행 dict}, ... ]}
+        // 봇이 URL의 ?data= 로 실어 보낸 대상 시장/현재 목록.
+        // 형식: {"market": "domestic"|"overseas", "columns": [...], "rows": [ {행 dict}, ... ]}
+        let market = 'domestic';
         let columns = [];
         let rows = []; // 각 행은 시트 컬럼 전체를 가진 객체(숨은 컬럼 보존).
 
-        // build_domestic_master_json.py가 만든 종목 마스터(브라우저 조회용).
+        // build_stock_master_json.py가 만든 종목 마스터(브라우저 조회용).
         let master = [];        // [{iscd, name, market}, ...]
         let masterByCode = {};  // iscd -> {iscd, name, market}
 
         const MAX_CANDIDATES = 10;
+        // 시장별 라벨/마스터 파일/입력 예시.
+        const MARKET_CONFIG = {
+            domestic: { label: '국장', file: './domestic_stocks.json',
+                        codeHint: '예: 005930', nameHint: '예: 삼성전자' },
+            overseas: { label: '미장', file: './overseas_stocks.json',
+                        codeHint: '예: AAPL', nameHint: '예: 애플' },
+        };
 
         function loadInitialData() {
             const params = new URLSearchParams(window.location.search);
@@ -85,6 +93,7 @@
             if (!raw) return;
             try {
                 const parsed = JSON.parse(raw);
+                if (parsed.market === 'overseas') market = 'overseas';
                 columns = Array.isArray(parsed.columns) ? parsed.columns : [];
                 rows = Array.isArray(parsed.rows) ? parsed.rows : [];
             } catch (e) {
@@ -92,9 +101,17 @@
             }
         }
 
-        // 종목 마스터 JSON을 폼과 같은 위치에서 fetch(같은 오리진이라 CORS 없음).
+        function applyMarketUi() {
+            const cfg = MARKET_CONFIG[market];
+            document.getElementById('title').textContent = `${cfg.label} 종목 목록`;
+            document.getElementById('iscd').placeholder = cfg.codeHint;
+            document.getElementById('name').placeholder = cfg.nameHint;
+        }
+
+        // 대상 시장의 종목 마스터 JSON을 폼과 같은 위치에서 fetch(같은 오리진이라 CORS 없음).
         function loadMaster() {
-            fetch('./domestic_stocks.json')
+            const cfg = MARKET_CONFIG[market];
+            fetch(cfg.file)
                 .then(res => {
                     if (!res.ok) throw new Error('HTTP ' + res.status);
                     return res.json();
@@ -103,7 +120,7 @@
                     master = Array.isArray(data) ? data : [];
                     masterByCode = {};
                     master.forEach(item => { masterByCode[item.iscd] = item; });
-                    setStatus(`종목 마스터 ${master.length}개 로드됨. 확인/찾기 사용 가능.`);
+                    setStatus(`${cfg.label} 종목 마스터 ${master.length}개 로드됨. 확인/찾기 사용 가능.`);
                 })
                 .catch(e => {
                     setStatus('종목 마스터를 불러오지 못했습니다. 직접 입력해 추가하세요. (' + e.message + ')', true);
@@ -123,7 +140,7 @@
             const hit = masterByCode[code];
             if (!hit) { setStatus(`코드 '${code}'에 해당하는 종목을 찾지 못했습니다.`, true); return; }
             document.getElementById('name').value = hit.name;
-            // exchange는 마스터의 상장시장 라벨(KOSPI/KOSDAQ)로 맞춘다(구매 플로우와 동일).
+            // exchange는 마스터의 시장 라벨(국장 KOSPI/KOSDAQ, 미장 NAS/NYS/AMS)로 맞춘다.
             document.getElementById('exchange').value = hit.market || '';
             hideCandidates();
             setStatus(`확인: ${hit.name} (${hit.market})`);
@@ -156,11 +173,10 @@
                 const div = document.createElement('div');
                 div.className = 'cand';
                 div.textContent = `${item.name} · ${item.iscd} (${item.market})`;
-                // 선택하면 코드+이름을 함께 확정.
+                // 선택하면 코드+이름+거래소를 함께 확정.
                 div.onclick = () => {
                     document.getElementById('iscd').value = item.iscd;
                     document.getElementById('name').value = item.name;
-                    // exchange도 마스터의 상장시장 라벨(KOSPI/KOSDAQ)로 함께 확정.
                     document.getElementById('exchange').value = item.market || '';
                     hideCandidates();
                     setStatus(`선택: ${item.name} · ${item.iscd}`);
@@ -182,7 +198,7 @@
             if (rows.length === 0) {
                 const li = document.createElement('li');
                 li.className = 'empty';
-                li.textContent = '등록된 국내 종목이 없습니다.';
+                li.textContent = `등록된 ${MARKET_CONFIG[market].label} 종목이 없습니다.`;
                 ul.appendChild(li);
                 return;
             }
@@ -215,8 +231,8 @@
                 setStatus('종목코드와 종목명을 입력해주세요.', true);
                 return;
             }
-            // market_key는 domestic으로 고정(봇에서도 강제로 다시 채운다).
-            rows.push({ market_key: 'domestic', iscd: iscd, name: name, exchange: exchange });
+            // market_key는 대상 시장으로 고정(봇에서도 강제로 다시 채운다).
+            rows.push({ market_key: market, iscd: iscd, name: name, exchange: exchange });
             document.getElementById('iscd').value = '';
             document.getElementById('name').value = '';
             document.getElementById('exchange').value = '';
@@ -226,9 +242,9 @@
         }
 
         function save() {
-            // 최종 목록을 봇으로 전송하고 웹앱 닫기.
+            // 최종 목록과 대상 시장을 봇으로 전송하고 웹앱 닫기.
             // 봇에는 message.web_app_data.data 로 이 JSON이 도착한다.
-            tg.sendData(JSON.stringify({ rows: rows }));
+            tg.sendData(JSON.stringify({ market: market, rows: rows }));
         }
 
         function escapeHtml(text) {
@@ -238,6 +254,7 @@
         }
 
         loadInitialData();
+        applyMarketUi();
         render();
         loadMaster();
     </script>
