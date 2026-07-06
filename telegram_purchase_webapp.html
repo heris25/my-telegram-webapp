@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>구매 주문</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
+        h2 { margin: 0 0 10px; }
+        .muted { color: #697789; font-size: 13px; margin-bottom: 12px; }
+        .card { background: #fff; border: 1px solid #d9e0e8; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+        ul { list-style: none; padding: 0; margin: 0; max-height: 260px; overflow: auto; }
+        li { padding: 10px; border-bottom: 1px solid #edf1f5; cursor: pointer; }
+        li:last-child { border-bottom: none; }
+        li.active { background: #eaf4ff; }
+        .name { font-weight: 700; }
+        .meta { font-size: 12px; color: #617184; margin-top: 3px; }
+        .row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+        .row label { min-width: 85px; font-size: 14px; }
+        input[type=text], input[type=number] {
+            flex: 1;
+            border: 1px solid #ccd6e2;
+            border-radius: 8px;
+            padding: 8px;
+            box-sizing: border-box;
+            font-size: 14px;
+        }
+        .step { width: 40px; height: 36px; border: 1px solid #ccd6e2; border-radius: 8px; background: #fff; }
+        .mode { display: flex; gap: 10px; margin-top: 6px; margin-bottom: 8px; }
+        .mode label { min-width: 0; }
+        #submit {
+            width: 100%;
+            border: none;
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(120deg, #0a7d4f, #169c67);
+            margin-top: 14px;
+        }
+        .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; }
+    </style>
+</head>
+<body>
+    <h2 id="title">구매 주문</h2>
+    <div class="muted" id="subtitle">시장을 선택해 주세요.</div>
+
+    <div class="card">
+        <ul id="item-list"></ul>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <label>선택 종목</label>
+            <input id="selected-name" type="text" readonly>
+        </div>
+
+        <div class="mode">
+            <label><input type="radio" name="mode" value="qty" checked> 가격/수량</label>
+            <label><input type="radio" name="mode" value="budget"> 가격/예산</label>
+        </div>
+
+        <div class="row">
+            <label>가격</label>
+            <button class="step" onclick="shiftPrice(-1)">-</button>
+            <input id="price" type="number" step="0.01" min="0">
+            <button class="step" onclick="shiftPrice(1)">+</button>
+        </div>
+
+        <div class="row" id="qty-row">
+            <label>수량</label>
+            <input id="qty" type="number" step="1" min="1" value="1">
+        </div>
+
+        <div class="row" id="budget-row" style="display:none">
+            <label>예산</label>
+            <input id="budget" type="number" step="0.01" min="0">
+        </div>
+
+        <div class="warn" id="warn"></div>
+        <button id="submit" onclick="submitOrder()">구매</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        let market = "domestic";
+        let rows = [];
+        let selected = null;
+
+        function parseInitialData() {
+            const raw = new URLSearchParams(window.location.search).get("data");
+            if (!raw) return;
+            try {
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.action === "purchase_form") {
+                    if (parsed.market === "overseas") market = "overseas";
+                    rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function fmtPrice(v) {
+            const n = Number(v || 0);
+            if (market === "overseas") return `$${n.toFixed(2)}`;
+            return `${Math.round(n).toLocaleString()}원`;
+        }
+
+        function setSubtitle() {
+            const label = market === "overseas" ? "미장" : "국장";
+            document.getElementById("title").textContent = `${label} 구매 주문`;
+            document.getElementById("subtitle").textContent = `${label} 관리 종목 ${rows.length}개`;
+        }
+
+        function renderList() {
+            const ul = document.getElementById("item-list");
+            ul.innerHTML = "";
+            if (rows.length === 0) {
+                const li = document.createElement("li");
+                li.textContent = "관리 종목이 없습니다.";
+                ul.appendChild(li);
+                return;
+            }
+            rows.forEach((row, i) => {
+                const li = document.createElement("li");
+                if (selected && selected.iscd === row.iscd) li.classList.add("active");
+                li.innerHTML =
+                    `<div class=\"name\">${escapeHtml(row.name || row.iscd)} (${escapeHtml(row.iscd || "")})</div>` +
+                    `<div class=\"meta\">${escapeHtml(row.exchange || "")} · 현재가 ${fmtPrice(row.current_price || 0)}</div>`;
+                li.onclick = () => pick(i);
+                ul.appendChild(li);
+            });
+        }
+
+        function pick(i) {
+            selected = rows[i];
+            document.getElementById("selected-name").value = `${selected.name || selected.iscd} (${selected.iscd})`;
+            const p = Number(selected.current_price || 0);
+            const step = Number(selected.price_step || (market === "overseas" ? 0.01 : 1));
+            if (p > 0) {
+                document.getElementById("price").value = market === "overseas" ? p.toFixed(2) : Math.round(p);
+                const defaultBudget = p * 10;
+                document.getElementById("budget").value = market === "overseas" ? defaultBudget.toFixed(2) : Math.round(defaultBudget);
+            }
+            document.getElementById("price").step = step;
+            renderList();
+        }
+
+        function shiftPrice(direction) {
+            const el = document.getElementById("price");
+            let current = Number(el.value || 0);
+            const step = selected ? Number(selected.price_step || 1) : 1;
+            current = Math.max(step, current + direction * step);
+            el.value = market === "overseas" ? current.toFixed(2) : Math.round(current);
+        }
+
+        function onModeChange() {
+            const mode = getMode();
+            document.getElementById("qty-row").style.display = mode === "qty" ? "flex" : "none";
+            document.getElementById("budget-row").style.display = mode === "budget" ? "flex" : "none";
+        }
+
+        function getMode() {
+            const selectedRadio = document.querySelector('input[name="mode"]:checked');
+            return selectedRadio ? selectedRadio.value : "qty";
+        }
+
+        function warn(msg) {
+            document.getElementById("warn").textContent = msg || "";
+        }
+
+        function submitOrder() {
+            warn("");
+            if (!selected) {
+                warn("종목을 먼저 선택해 주세요.");
+                return;
+            }
+            const price = Number(document.getElementById("price").value || 0);
+            if (!(price > 0)) {
+                warn("가격을 입력해 주세요.");
+                return;
+            }
+
+            const mode = getMode();
+            const payload = {
+                action: "purchase_submit",
+                market: market,
+                item: {
+                    iscd: selected.iscd,
+                    name: selected.name,
+                    exchange: selected.exchange || "",
+                },
+                mode: mode,
+                price: price,
+            };
+
+            if (mode === "qty") {
+                const qty = Number(document.getElementById("qty").value || 0);
+                if (!Number.isInteger(qty) || qty <= 0) {
+                    warn("수량은 1 이상의 정수여야 합니다.");
+                    return;
+                }
+                payload.quantity = qty;
+            } else {
+                const budget = Number(document.getElementById("budget").value || 0);
+                if (!(budget > 0)) {
+                    warn("예산은 0보다 커야 합니다.");
+                    return;
+                }
+                payload.budget = budget;
+            }
+
+            tg.sendData(JSON.stringify(payload));
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement("div");
+            div.textContent = text == null ? "" : String(text);
+            return div.innerHTML;
+        }
+
+        parseInitialData();
+        setSubtitle();
+        renderList();
+        document.querySelectorAll('input[name="mode"]').forEach((el) => {
+            el.addEventListener("change", onModeChange);
+        });
+        onModeChange();
+        if (rows.length > 0) pick(0);
+    </script>
+</body>
+</html>
