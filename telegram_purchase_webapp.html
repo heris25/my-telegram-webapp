@@ -41,6 +41,9 @@
             margin-top: 14px;
         }
         .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; }
+        .chart-wrap { margin-top: 10px; border: 1px solid #d9e0e8; border-radius: 8px; background: #fff; padding: 8px; }
+        #candles { width: 100%; height: 220px; display: block; }
+        .chart-empty { color: #6b7889; font-size: 12px; margin-top: 6px; }
     </style>
 </head>
 <body>
@@ -49,6 +52,10 @@
 
     <div class="card">
         <ul id="item-list"></ul>
+        <div class="chart-wrap">
+            <canvas id="candles" width="640" height="220"></canvas>
+            <div id="chart-empty" class="chart-empty"></div>
+        </div>
     </div>
 
     <div class="card">
@@ -89,6 +96,7 @@
 
         let market = "domestic";
         let rows = [];
+        let candles5m = [];
         let selected = null;
 
         function parseInitialData() {
@@ -99,6 +107,11 @@
                 if (parsed && parsed.action === "purchase_form") {
                     if (parsed.market === "overseas") market = "overseas";
                     rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+                    candles5m = [];
+                } else if (parsed && parsed.action === "purchase_form_selected") {
+                    if (parsed.market === "overseas") market = "overseas";
+                    rows = parsed.item ? [parsed.item] : [];
+                    candles5m = Array.isArray(parsed.candles_5m) ? parsed.candles_5m : [];
                 }
             } catch (e) {
                 console.error(e);
@@ -134,6 +147,62 @@
                     `<div class=\"meta\">${escapeHtml(row.exchange || "")} · 현재가 ${fmtPrice(row.current_price || 0)}</div>`;
                 li.onclick = () => pick(i);
                 ul.appendChild(li);
+            });
+        }
+
+        function renderCandles() {
+            const canvas = document.getElementById("candles");
+            const empty = document.getElementById("chart-empty");
+            const ctx = canvas.getContext("2d");
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (!candles5m || candles5m.length === 0) {
+                empty.textContent = "5분봉 데이터가 없습니다.";
+                return;
+            }
+            empty.textContent = `최근 5분봉 ${candles5m.length}개`;
+
+            const high = Math.max(...candles5m.map(c => Number(c.high || 0)));
+            const low = Math.min(...candles5m.map(c => Number(c.low || 0)));
+            const pad = (high - low) * 0.05 || 1;
+            const maxY = high + pad;
+            const minY = low - pad;
+
+            const left = 10;
+            const right = canvas.width - 10;
+            const top = 10;
+            const bottom = canvas.height - 24;
+            const width = right - left;
+            const height = bottom - top;
+
+            const toY = (price) => {
+                const ratio = (price - minY) / (maxY - minY);
+                return bottom - ratio * height;
+            };
+
+            const stepX = width / Math.max(candles5m.length, 1);
+            const bodyW = Math.max(2, stepX * 0.6);
+
+            candles5m.forEach((candle, idx) => {
+                const o = Number(candle.open || 0);
+                const h = Number(candle.high || 0);
+                const l = Number(candle.low || 0);
+                const c = Number(candle.close || 0);
+                const x = left + idx * stepX + stepX / 2;
+
+                const color = c > o ? "#d62728" : c < o ? "#1f77b4" : "#7f7f7f";
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                ctx.moveTo(x, toY(h));
+                ctx.lineTo(x, toY(l));
+                ctx.stroke();
+
+                const y1 = toY(o);
+                const y2 = toY(c);
+                const y = Math.min(y1, y2);
+                const bh = Math.max(1, Math.abs(y2 - y1));
+                ctx.fillStyle = color;
+                ctx.fillRect(x - bodyW / 2, y, bodyW, bh);
             });
         }
 
@@ -227,6 +296,7 @@
         parseInitialData();
         setSubtitle();
         renderList();
+        renderCandles();
         document.querySelectorAll('input[name="mode"]').forEach((el) => {
             el.addEventListener("change", onModeChange);
         });
