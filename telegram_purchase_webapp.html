@@ -168,10 +168,10 @@
             const maxY = high + pad;
             const minY = low - pad;
 
-            const left = 10;
-            const right = canvas.width - 10;
+            const left = market === "overseas" ? 70 : 82;
+            const right = canvas.width - 12;
             const top = 10;
-            const bottom = canvas.height - 24;
+            const bottom = canvas.height - 30;
             const width = right - left;
             const height = bottom - top;
 
@@ -179,6 +179,70 @@
                 const ratio = (price - minY) / (maxY - minY);
                 return bottom - ratio * height;
             };
+
+            const formatAxisPrice = (value) => {
+                const n = Number(value || 0);
+                if (market === "overseas") {
+                    return `$${n.toFixed(2)}`;
+                }
+                return Math.round(n).toLocaleString();
+            };
+
+            const formatAxisTime = (startAt) => {
+                if (!startAt) return "";
+                const text = String(startAt);
+                const m = text.match(/(\d{2}):(\d{2})/);
+                if (m) return `${m[1]}:${m[2]}`;
+                return text.slice(-5);
+            };
+
+            // Axes and grid lines
+            ctx.save();
+            ctx.strokeStyle = "#e3e9f0";
+            ctx.fillStyle = "#617184";
+            ctx.font = "11px sans-serif";
+            ctx.lineWidth = 1;
+
+            const yTickCount = 5;
+            for (let i = 0; i <= yTickCount; i += 1) {
+                const ratio = i / yTickCount;
+                const price = maxY - (maxY - minY) * ratio;
+                const y = top + height * ratio;
+
+                ctx.beginPath();
+                ctx.moveTo(left, y);
+                ctx.lineTo(right, y);
+                ctx.stroke();
+
+                const label = formatAxisPrice(price);
+                ctx.textAlign = "right";
+                ctx.textBaseline = "middle";
+                ctx.fillText(label, left - 6, y);
+            }
+
+            ctx.strokeStyle = "#cfd8e3";
+            ctx.beginPath();
+            ctx.moveTo(left, top);
+            ctx.lineTo(left, bottom);
+            ctx.lineTo(right, bottom);
+            ctx.stroke();
+
+            const xTickCount = Math.min(6, Math.max(2, candles5m.length));
+            for (let i = 0; i < xTickCount; i += 1) {
+                const idx = Math.round((candles5m.length - 1) * (i / (xTickCount - 1)));
+                const x = left + (idx + 0.5) * (width / Math.max(candles5m.length, 1));
+                const label = formatAxisTime(candles5m[idx]?.start_at);
+
+                ctx.beginPath();
+                ctx.moveTo(x, bottom);
+                ctx.lineTo(x, bottom + 4);
+                ctx.stroke();
+
+                ctx.textAlign = "center";
+                ctx.textBaseline = "top";
+                ctx.fillText(label, x, bottom + 6);
+            }
+            ctx.restore();
 
             const stepX = width / Math.max(candles5m.length, 1);
             const bodyW = Math.max(2, stepX * 0.6);
