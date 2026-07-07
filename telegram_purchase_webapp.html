@@ -42,11 +42,68 @@
             margin-top: 14px;
         }
         .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; }
+        .summary-card { border: 1px solid #d6e2ef; background: linear-gradient(180deg, #f8fbff, #f2f7fc); }
+        .summary-title { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+        .summary-period { font-size: 12px; color: #5f6f82; margin-bottom: 8px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .summary-item { border: 1px solid #e1ebf3; border-radius: 8px; background: #fff; padding: 8px; }
+        .summary-label { font-size: 11px; color: #5f6f82; margin-bottom: 2px; }
+        .summary-value { font-size: 13px; font-weight: 700; }
+        .up { color: #c0342f; }
+        .down { color: #1f5ea8; }
+        .neutral { color: #324255; }
+        .summary-line { margin-top: 8px; font-size: 12px; color: #324255; }
+        .summary-line strong { font-weight: 700; }
+        .zone-badge {
+            display: inline-flex;
+            align-items: center;
+            height: 22px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid #d3dee9;
+            background: #eef3f9;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            margin-left: 6px;
+            vertical-align: middle;
+            color: #324255;
+        }
+        .zone-high { color: #b52b27; border-color: #efc6c4; background: #fff1f1; }
+        .zone-low { color: #1f5ea8; border-color: #c3d7f1; background: #eff6ff; }
+        .zone-mid { color: #596a7e; border-color: #d3dee9; background: #eef3f9; }
     </style>
 </head>
 <body>
     <h2 id="title">구매 주문</h2>
     <div class="muted" id="subtitle">시장을 선택해 주세요.</div>
+
+    <div class="card summary-card" id="chart-summary-card" style="display:none">
+        <div class="summary-title">텔레그램 5분봉 요약</div>
+        <div class="summary-period" id="summary-period">-</div>
+        <div class="summary-grid">
+            <div class="summary-item">
+                <div class="summary-label">Start</div>
+                <div class="summary-value neutral" id="summary-start">-</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Current</div>
+                <div class="summary-value" id="summary-current">-</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">High</div>
+                <div class="summary-value" id="summary-high">-</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Low</div>
+                <div class="summary-value" id="summary-low">-</div>
+            </div>
+        </div>
+        <div class="summary-line">
+            <strong id="summary-dd">DD: -</strong>
+            <span class="zone-badge zone-mid" id="summary-zone-badge">MID RANGE</span>
+        </div>
+    </div>
 
     <div class="card">
         <ul id="item-list"></ul>
@@ -96,6 +153,7 @@
         let market = "domestic";
         let rows = [];
         let selected = null;
+        let chartSummary = null;
 
         function parseInitialData() {
             const raw = new URLSearchParams(window.location.search).get("data");
@@ -105,13 +163,90 @@
                 if (parsed && parsed.action === "purchase_form") {
                     if (parsed.market === "overseas") market = "overseas";
                     rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+                    chartSummary = null;
                 } else if (parsed && parsed.action === "purchase_form_selected") {
                     if (parsed.market === "overseas") market = "overseas";
                     rows = parsed.item ? [parsed.item] : [];
+                    chartSummary = parsed.chart_summary && typeof parsed.chart_summary === "object"
+                        ? parsed.chart_summary
+                        : null;
                 }
             } catch (e) {
                 console.error(e);
             }
+        }
+
+        function fmtSignedPct(v) {
+            const n = Number(v || 0);
+            return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+        }
+
+        function setTone(el, value) {
+            el.classList.remove("up", "down", "neutral");
+            const n = Number(value || 0);
+            if (n > 0) {
+                el.classList.add("up");
+                return;
+            }
+            if (n < 0) {
+                el.classList.add("down");
+                return;
+            }
+            el.classList.add("neutral");
+        }
+
+        function applyZoneTone(el, zone) {
+            el.classList.remove("zone-high", "zone-low", "zone-mid");
+            if (zone === "NEAR HIGH") {
+                el.classList.add("zone-high");
+                return;
+            }
+            if (zone === "NEAR LOW") {
+                el.classList.add("zone-low");
+                return;
+            }
+            el.classList.add("zone-mid");
+        }
+
+        function zoneLabelKo(zone) {
+            if (zone === "NEAR HIGH") return "고점 근접";
+            if (zone === "NEAR LOW") return "저점 근접";
+            return "중립 구간";
+        }
+
+        function renderChartSummary() {
+            const card = document.getElementById("chart-summary-card");
+            if (!chartSummary) {
+                card.style.display = "none";
+                return;
+            }
+
+            card.style.display = "block";
+            document.getElementById("summary-period").textContent = `기간: ${chartSummary.period || "-"}`;
+
+            const startEl = document.getElementById("summary-start");
+            startEl.textContent = Number(chartSummary.start_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            const currentEl = document.getElementById("summary-current");
+            currentEl.textContent = `${Number(chartSummary.current_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${fmtSignedPct(chartSummary.current_change_pct)})`;
+            setTone(currentEl, chartSummary.current_change_pct);
+
+            const highEl = document.getElementById("summary-high");
+            highEl.textContent = `${Number(chartSummary.high_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${fmtSignedPct(chartSummary.high_change_pct)}) @ ${chartSummary.high_time || "-"}`;
+            setTone(highEl, chartSummary.high_change_pct);
+
+            const lowEl = document.getElementById("summary-low");
+            lowEl.textContent = `${Number(chartSummary.low_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${fmtSignedPct(chartSummary.low_change_pct)}) @ ${chartSummary.low_time || "-"}`;
+            setTone(lowEl, chartSummary.low_change_pct);
+
+            const ddEl = document.getElementById("summary-dd");
+            ddEl.textContent = `DD: ${fmtSignedPct(chartSummary.dd_pct)}`;
+            setTone(ddEl, chartSummary.dd_pct);
+
+            const zoneEl = document.getElementById("summary-zone-badge");
+            const zoneText = String(chartSummary.zone || "MID RANGE");
+            zoneEl.textContent = zoneLabelKo(zoneText);
+            applyZoneTone(zoneEl, zoneText);
         }
 
         function fmtPrice(v) {
@@ -276,6 +411,7 @@
 
         parseInitialData();
         setSubtitle();
+        renderChartSummary();
         renderList();
         document.querySelectorAll('input[name="mode"]').forEach((el) => {
             el.addEventListener("change", onModeChange);
