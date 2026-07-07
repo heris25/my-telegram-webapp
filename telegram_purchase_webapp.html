@@ -192,12 +192,20 @@
 
             const startPrice = Number(candles5m[0]?.open || 0);
             const currentPrice = Number(candles5m[candles5m.length - 1]?.close || 0);
+            let highIdx = 0;
+            for (let i = 1; i < candles5m.length; i += 1) {
+                if (Number(candles5m[i]?.high || 0) > Number(candles5m[highIdx]?.high || 0)) {
+                    highIdx = i;
+                }
+            }
             let lowIdx = 0;
             for (let i = 1; i < candles5m.length; i += 1) {
                 if (Number(candles5m[i]?.low || 0) < Number(candles5m[lowIdx]?.low || 0)) {
                     lowIdx = i;
                 }
             }
+            const highPrice = Number(candles5m[highIdx]?.high || 0);
+            const highTime = formatAxisTime(candles5m[highIdx]?.start_at);
             const lowPrice = Number(candles5m[lowIdx]?.low || 0);
             const lowTime = formatAxisTime(candles5m[lowIdx]?.start_at);
             const pct = (v) => {
@@ -205,10 +213,14 @@
                 return ((v / startPrice) - 1) * 100;
             };
             const currentPct = pct(currentPrice);
+            const highPct = pct(highPrice);
             const lowPct = pct(lowPrice);
+            const drawdownPct = highPrice > 0 ? ((currentPrice / highPrice) - 1) * 100 : 0;
             summaryEl.textContent =
                 `시작대비 현재 ${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(2)}% · ` +
-                `저점 ${lowPct >= 0 ? "+" : ""}${lowPct.toFixed(2)}% (${lowTime})`;
+                `고점 ${highPct >= 0 ? "+" : ""}${highPct.toFixed(2)}% (${highTime}) · ` +
+                `저점 ${lowPct >= 0 ? "+" : ""}${lowPct.toFixed(2)}% (${lowTime}) · ` +
+                `고점대비현재 ${drawdownPct >= 0 ? "+" : ""}${drawdownPct.toFixed(2)}%`;
 
             const formatAxisPrice = (value) => {
                 const n = Number(value || 0);
@@ -298,6 +310,28 @@
                 ctx.fillStyle = color;
                 ctx.fillRect(x - bodyW / 2, y, bodyW, bh);
             });
+
+            // 주요 지점 강조: 고점 마커 + 퍼센트 라벨.
+            const highX = left + highIdx * stepX + stepX / 2;
+            const highY = toY(highPrice);
+            ctx.save();
+            ctx.fillStyle = "#d62728";
+            ctx.beginPath();
+            ctx.arc(highX, highY, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            const highLabel = `고점 ${highPct >= 0 ? "+" : ""}${highPct.toFixed(2)}%`;
+            ctx.font = "11px sans-serif";
+            const htw = ctx.measureText(highLabel).width;
+            const hx = Math.min(canvas.width - htw - 8, highX + 8);
+            const hy = Math.max(12, highY - 12);
+            ctx.fillStyle = "rgba(255,255,255,0.9)";
+            ctx.fillRect(hx - 4, hy - 10, htw + 8, 14);
+            ctx.strokeStyle = "#e2b0b0";
+            ctx.strokeRect(hx - 4, hy - 10, htw + 8, 14);
+            ctx.fillStyle = "#d62728";
+            ctx.fillText(highLabel, hx, hy);
+            ctx.restore();
 
             // 주요 지점 강조: 저점 마커 + 퍼센트 라벨.
             const lowX = left + lowIdx * stepX + stepX / 2;
