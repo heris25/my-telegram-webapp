@@ -216,11 +216,15 @@
             const highPct = pct(highPrice);
             const lowPct = pct(lowPrice);
             const drawdownPct = highPrice > 0 ? ((currentPrice / highPrice) - 1) * 100 : 0;
+            const distFromHighPct = highPrice > 0 ? ((highPrice - currentPrice) / highPrice) * 100 : 0;
+            const reboundFromLowPct = lowPrice > 0 ? ((currentPrice - lowPrice) / lowPrice) * 100 : 0;
+            const zone = distFromHighPct <= 5 ? "고점근처" : (reboundFromLowPct <= 5 ? "저점근처" : "중립");
             summaryEl.textContent =
                 `시작대비 현재 ${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(2)}% · ` +
                 `고점 ${highPct >= 0 ? "+" : ""}${highPct.toFixed(2)}% (${highTime}) · ` +
                 `저점 ${lowPct >= 0 ? "+" : ""}${lowPct.toFixed(2)}% (${lowTime}) · ` +
-                `고점대비현재 ${drawdownPct >= 0 ? "+" : ""}${drawdownPct.toFixed(2)}%`;
+                `고점대비현재 ${drawdownPct >= 0 ? "+" : ""}${drawdownPct.toFixed(2)}% · ` +
+                `구간 ${zone}`;
 
             const formatAxisPrice = (value) => {
                 const n = Number(value || 0);
