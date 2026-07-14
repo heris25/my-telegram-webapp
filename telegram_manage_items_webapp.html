@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>항목 관리</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 16px; }
+        h2 { margin-top: 0; }
+        .actions { display: flex; gap: 8px; margin-bottom: 12px; }
+        .actions button { flex: 1; padding: 10px 6px; font-size: 14px; border: none;
+                          border-radius: 6px; color: #fff; }
+        .act-add { background: #2ecc71; }
+        .act-del { background: #e74c3c; }
+        .act-edit { background: #3498db; }
+        ul { list-style: none; padding: 0; }
+        li { display: flex; align-items: center; gap: 8px;
+             padding: 8px; border-bottom: 1px solid #ddd; }
+        li input[type=checkbox] { width: 18px; height: 18px; }
+        .info { flex: 1; min-width: 0; }
+        .info .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .code { color: #888; font-size: 0.85em; }
+        .badge { font-size: 0.72em; padding: 1px 6px; border-radius: 8px; color: #fff; }
+        .badge.dom { background: #16a085; }
+        .badge.ovs { background: #8e44ad; }
+        .add-box { margin-top: 8px; padding: 12px; border: 1px solid #ccc; border-radius: 6px; }
+        .add-box label { display: block; margin-top: 8px; font-weight: bold; }
+        .add-box .chk { font-weight: normal; }
+        .field { display: flex; gap: 6px; margin-top: 4px; }
+        .field input[type=text] { flex: 1; padding: 8px; box-sizing: border-box; }
+        .field button { padding: 8px 12px; white-space: nowrap; }
+        button.primary { margin-top: 12px; padding: 10px 16px; width: 100%; font-size: 15px; }
+        #save { margin-top: 20px; padding: 14px; width: 100%; font-size: 16px;
+                background: #2ecc71; color: #fff; border: none; border-radius: 6px; }
+        .empty { color: #888; padding: 8px 0; }
+        .candidates { margin-top: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .candidates .cand { padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
+        .candidates .cand:last-child { border-bottom: none; }
+        .candidates .cand:hover { background: #f0f8ff; }
+        .status { margin-top: 6px; font-size: 0.85em; color: #888; }
+        .status.error { color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <h2 id="title">항목 관리</h2>
+
+    <div class="actions">
+        <button class="act-add" onclick="toggleAdd()">➕ 항목 추가</button>
+        <button class="act-del" onclick="deleteSelected()">🗑 항목 삭제</button>
+        <button class="act-edit" onclick="openSheet()">✏️ 항목 수정</button>
+    </div>
+
+    <div id="add-box" class="add-box" style="display:none">
+        <strong>항목 추가</strong>
+
+        <label for="iscd">종목코드 (iscd)</label>
+        <div class="field">
+            <input type="text" id="iscd" placeholder="예: 005930 / AAPL">
+            <button onclick="lookupByCode()">확인</button>
+        </div>
+
+        <label for="name">종목명 (name)</label>
+        <div class="field">
+            <input type="text" id="name" placeholder="예: 삼성전자 / 애플">
+            <button onclick="searchByName()">찾기</button>
+        </div>
+
+        <div id="candidates" class="candidates" style="display:none"></div>
+
+        <label for="exchange">거래소 (exchange)</label>
+        <div class="field">
+            <input type="text" id="exchange" placeholder="확인/찾기로 자동 채움 (KOSPI/NAS 등)">
+        </div>
+
+        <label class="chk"><input type="checkbox" id="new-is-used" checked> 사용 (is_used)</label>
+        <label class="chk"><input type="checkbox" id="new-regular-only"> 정규장 전용 (regular_only)</label>
+
+        <button class="primary act-add" onclick="addRow()">➕ 추가</button>
+        <div id="status" class="status"></div>
+    </div>
+
+    <ul id="list"></ul>
+
+    <button id="save" onclick="save()">💾 저장</button>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        // 봇이 URL의 ?data= 로 실어 보낸 현재 목록/시트 URL.
+        // 형식: {"action":"manage_items","rows":[{market_key,exchange,iscd,name,is_used,regular_only},...],"sheetUrl":"..."}
+        let rows = [];
+        let sheetUrl = '';
+
+        // 국장/미장 종목 마스터(브라우저 조회용). 두 파일을 합쳐 한 목록으로 검색한다.
+        let master = [];        // [{iscd, name, market}, ...] (market = 거래소 라벨)
+        let masterByCode = {};  // iscd -> {iscd, name, market}
+
+        const MAX_CANDIDATES = 10;
+        const TRUTHY = ['true', '1', 'y', 'yes', 't'];
+        // 거래소 라벨 → 시장 구분(market_key). 국장 KOSPI/KOSDAQ, 미장 NAS/NYS/AMS.
+        const DOMESTIC_EXCHANGES = ['KOSPI', 'KOSDAQ'];
+        const OVERSEAS_EXCHANGES = ['NAS', 'NYS', 'AMS'];
+        // 폼과 같은 위치에 배포된 시장별 마스터 JSON.
+        const MASTER_FILES = ['./domestic_stocks.json', './overseas_stocks.json'];
+
+        function truthy(v) {
+            return TRUTHY.includes(String(v == null ? '' : v).trim().toLowerCase());
+        }
+
+        // 거래소 라벨로 시장 구분을 판별한다. 알 수 없으면 ''.
+        function marketKeyOf(exchange) {
+            const up = String(exchange || '').trim().toUpperCase();
+            if (DOMESTIC_EXCHANGES.includes(up)) return 'domestic';
+            if (OVERSEAS_EXCHANGES.includes(up)) return 'overseas';
+            return '';
+        }
+
+        function loadInitialData() {
+            const params = new URLSearchParams(window.location.search);
+            const raw = params.get('data');
+            if (!raw) return;
+            try {
+                const parsed = JSON.parse(raw);
+                rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+                sheetUrl = parsed.sheetUrl || '';
+            } catch (e) {
+                console.error('data 파싱 실패', e);
+            }
+        }
+
+        // 국장/미장 마스터 JSON을 모두 fetch해 하나로 합친다(같은 오리진, CORS 없음).
+        function loadMaster() {
+            Promise.all(MASTER_FILES.map(f =>
+                fetch(f).then(res => res.ok ? res.json() : []).catch(() => [])
+            )).then(lists => {
+                master = [];
+                masterByCode = {};
+                lists.forEach(list => {
+                    (Array.isArray(list) ? list : []).forEach(item => {
+                        master.push(item);
+                        masterByCode[item.iscd] = item;
+                    });
+                });
+                if (master.length > 0) {
+                    setStatus(`종목 마스터 ${master.length}개 로드됨. 확인/찾기 사용 가능.`);
+                } else {
+                    setStatus('종목 마스터를 불러오지 못했습니다. 직접 입력해 추가하세요.', true);
+                }
+            });
+        }
+
+        function setStatus(msg, isError) {
+            const el = document.getElementById('status');
+            el.textContent = msg || '';
+            el.className = 'status' + (isError ? ' error' : '');
+        }
+
+        function toggleAdd() {
+            const box = document.getElementById('add-box');
+            box.style.display = (box.style.display === 'none') ? 'block' : 'none';
+            if (box.style.display === 'block') {
+                document.getElementById('iscd').focus();
+            }
+        }
+
+        // 항목 수정: 공유된 구글시트를 브라우저로 연다(직접 편집).
+        function openSheet() {
+            if (!sheetUrl) {
+                alert('열 수 있는 시트 URL이 설정되어 있지 않습니다. (config item_sheet_url)');
+                return;
+            }
+            tg.openLink(sheetUrl);
+        }
+
+        // 확인: 종목코드로 이름/거래소를 찾아 입력칸을 채운다.
+        function lookupByCode() {
+            const code = document.getElementById('iscd').value.trim();
+            if (!code) { setStatus('종목코드를 입력하세요.', true); return; }
+            const hit = masterByCode[code];
+            if (!hit) { setStatus(`코드 '${code}'에 해당하는 종목을 찾지 못했습니다.`, true); return; }
+            document.getElementById('name').value = hit.name;
+            document.getElementById('exchange').value = hit.market || '';
+            hideCandidates();
+            setStatus(`확인: ${hit.name} (${hit.market})`);
+        }
+
+        // 찾기: 이름/코드 부분일치로 후보를 최대 MAX_CANDIDATES개 보여준다(국장+미장 통합).
+        function searchByName() {
+            const needle = document.getElementById('name').value.trim().toLowerCase();
+            if (!needle) { setStatus('종목명을 입력하세요.', true); return; }
+            const matched = [];
+            for (const item of master) {
+                const hay = (item.name + ' ' + item.iscd).toLowerCase();
+                if (hay.includes(needle)) {
+                    matched.push(item);
+                    if (matched.length >= MAX_CANDIDATES) break;
+                }
+            }
+            renderCandidates(matched);
+        }
+
+        function renderCandidates(matched) {
+            const box = document.getElementById('candidates');
+            box.innerHTML = '';
+            if (matched.length === 0) {
+                box.style.display = 'none';
+                setStatus('검색 결과가 없습니다.', true);
+                return;
+            }
+            matched.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'cand';
+                div.textContent = `${item.name} · ${item.iscd} (${item.market})`;
+                div.onclick = () => {
+                    document.getElementById('iscd').value = item.iscd;
+                    document.getElementById('name').value = item.name;
+                    document.getElementById('exchange').value = item.market || '';
+                    // 미장은 추가 시 정규장 전용 기본 ON.
+                    document.getElementById('new-regular-only').checked =
+                        (marketKeyOf(item.market) === 'overseas');
+                    hideCandidates();
+                    setStatus(`선택: ${item.name} · ${item.iscd}`);
+                };
+                box.appendChild(div);
+            });
+            box.style.display = 'block';
+        }
+
+        function hideCandidates() {
+            const box = document.getElementById('candidates');
+            box.style.display = 'none';
+            box.innerHTML = '';
+        }
+
+        function render() {
+            const ul = document.getElementById('list');
+            ul.innerHTML = '';
+            if (rows.length === 0) {
+                const li = document.createElement('li');
+                li.className = 'empty';
+                li.textContent = '등록된 항목이 없습니다.';
+                ul.appendChild(li);
+                return;
+            }
+            rows.forEach((row, idx) => {
+                const li = document.createElement('li');
+
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.dataset.idx = idx;
+                cb.className = 'sel';
+
+                const info = document.createElement('div');
+                info.className = 'info';
+                const nameText = row.name || '(이름 없음)';
+                const codeText = [row.iscd, row.exchange].filter(Boolean).join(' · ');
+                const mk = marketKeyOf(row.exchange) || row.market_key;
+                const badgeClass = mk === 'overseas' ? 'ovs' : 'dom';
+                const badgeLabel = mk === 'overseas' ? '미장' : '국장';
+                info.innerHTML =
+                    `<div class="nm">${escapeHtml(nameText)} ` +
+                    `<span class="badge ${badgeClass}">${badgeLabel}</span></div>` +
+                    `<div class="code">${escapeHtml(codeText)}</div>`;
+
+                li.appendChild(cb);
+                li.appendChild(info);
+                ul.appendChild(li);
+            });
+        }
+
+        // 항목 삭제: 체크된 항목(여러 개)을 목록에서 제거한다.
+        function deleteSelected() {
+            const checked = Array.from(document.querySelectorAll('.sel:checked'))
+                .map(cb => Number(cb.dataset.idx));
+            if (checked.length === 0) {
+                alert('삭제할 항목을 먼저 선택하세요(체크박스).');
+                return;
+            }
+            if (!confirm(`선택한 ${checked.length}개 항목을 삭제할까요? ("저장"을 눌러야 최종 반영됩니다)`)) {
+                return;
+            }
+            const drop = new Set(checked);
+            rows = rows.filter((_row, idx) => !drop.has(idx));
+            render();
+        }
+
+        function addRow() {
+            const iscd = document.getElementById('iscd').value.trim();
+            const name = document.getElementById('name').value.trim();
+            const exchange = document.getElementById('exchange').value.trim();
+            if (!iscd || !name) {
+                setStatus('종목코드와 종목명을 입력해주세요.', true);
+                return;
+            }
+            const marketKey = marketKeyOf(exchange);
+            if (!marketKey) {
+                setStatus('거래소를 확인해주세요(국장 KOSPI/KOSDAQ, 미장 NAS/NYS/AMS).', true);
+                return;
+            }
+            // 이미 있는 이름이면 알림하고 추가하지 않는다.
+            const dupName = name.toLowerCase();
+            if (rows.some(r => String(r.name || '').trim().toLowerCase() === dupName)) {
+                setStatus(`이미 있는 이름입니다: ${name}`, true);
+                alert(`이미 있는 이름입니다: ${name}`);
+                return;
+            }
+            rows.push({
+                market_key: marketKey,
+                iscd: iscd,
+                name: name,
+                exchange: exchange,
+                is_used: document.getElementById('new-is-used').checked ? 'TRUE' : 'FALSE',
+                regular_only: document.getElementById('new-regular-only').checked ? 'TRUE' : 'FALSE',
+            });
+            document.getElementById('iscd').value = '';
+            document.getElementById('name').value = '';
+            document.getElementById('exchange').value = '';
+            document.getElementById('new-is-used').checked = true;
+            document.getElementById('new-regular-only').checked = false;
+            hideCandidates();
+            setStatus(`추가됨: ${name} · ${iscd} (${exchange})`);
+            render();
+        }
+
+        function save() {
+            // 최종 목록을 봇으로 전송하고 웹앱 닫기.
+            // 봇에는 message.web_app_data.data 로 이 JSON이 도착한다.
+            tg.sendData(JSON.stringify({ action: 'manage_items', rows: rows }));
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text == null ? '' : String(text);
+            return div.innerHTML;
+        }
+
+        loadInitialData();
+        render();
+        loadMaster();
+    </script>
+</body>
+</html>
