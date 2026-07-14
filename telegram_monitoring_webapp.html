@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>익절 감시 등록</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
+        h2 { margin: 0 0 6px; }
+        .muted { color: #697789; font-size: 13px; margin-bottom: 12px; }
+        .card { background: #fff; border: 1px solid #d9e0e8; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+
+        /* 국장/미장 탭 */
+        .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+        .tab {
+            flex: 1;
+            border: 1px solid #ccd6e2;
+            border-radius: 10px;
+            background: #fff;
+            padding: 12px;
+            font-size: 15px;
+            font-weight: 700;
+            color: #4a5a6d;
+        }
+        .tab.active { background: #eaf4ff; border-color: #7db4e8; color: #14538f; }
+
+        ul { list-style: none; padding: 0; margin: 0; max-height: 34vh; overflow: auto; }
+        li { padding: 12px 10px; border-bottom: 1px solid #edf1f5; cursor: pointer; }
+        li:last-child { border-bottom: none; }
+        li.active { background: #eaf4ff; }
+        .name { font-weight: 700; }
+        .meta { font-size: 12px; color: #617184; margin-top: 3px; }
+        .empty { padding: 14px 10px; color: #8494a6; font-size: 14px; }
+
+        .row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+        .row label { min-width: 95px; font-size: 14px; }
+        input[type=number] {
+            flex: 1;
+            border: 1px solid #ccd6e2;
+            border-radius: 8px;
+            padding: 10px;
+            box-sizing: border-box;
+            font-size: 15px;
+        }
+
+        #submit {
+            width: 100%;
+            border: none;
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(120deg, #0a7d4f, #169c67);
+        }
+        #submit:disabled { opacity: 0.45; }
+        .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <h2>🔔 익절(상승 반전) 감시 등록</h2>
+    <div class="muted">시장 → 종목 → 매입가 → 목표 수익률을 입력하고 한 번에 등록하세요.</div>
+
+    <div class="tabs">
+        <button type="button" class="tab active" data-market="domestic">국장</button>
+        <button type="button" class="tab" data-market="overseas">미장</button>
+    </div>
+
+    <div class="card">
+        <ul id="item-list"></ul>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <label>선택 종목</label>
+            <input id="selected-name" type="number" style="display:none">
+            <div id="selected-label" style="flex:1; font-weight:700; color:#14538f;">-</div>
+        </div>
+        <div class="row">
+            <label>매입 금액</label>
+            <input id="base-price" type="number" min="0" step="any" placeholder="예: 100000">
+        </div>
+        <div class="row">
+            <label>목표 수익률(%)</label>
+            <input id="target-pct" type="number" min="0" step="any" placeholder="예: 5">
+        </div>
+    </div>
+
+    <button id="submit" disabled>감시 등록</button>
+    <div class="warn" id="warn"></div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        let rows = [];          // [{market_key, iscd, name}]
+        let market = "domestic";
+        let selected = null;
+
+        // 봇이 보낸 관리 종목 목록: ?data={"action":"monitoring_form","rows":[...]}
+        (function loadRows() {
+            try {
+                const raw = new URLSearchParams(window.location.search).get("data");
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.action === "monitoring_form" && Array.isArray(parsed.rows)) {
+                    rows = parsed.rows;
+                }
+            } catch (e) {
+                document.getElementById("warn").textContent = "종목 목록을 읽지 못했습니다: " + e;
+            }
+        })();
+
+        function validate() {
+            const base = Number(document.getElementById("base-price").value);
+            const pct = document.getElementById("target-pct").value;
+            const ok = selected !== null && base > 0 && pct !== "" && Number(pct) >= 0;
+            document.getElementById("submit").disabled = !ok;
+        }
+
+        function renderList() {
+            const listEl = document.getElementById("item-list");
+            listEl.innerHTML = "";
+
+            const items = rows.filter(r => r.market_key === market);
+            if (items.length === 0) {
+                const li = document.createElement("li");
+                li.className = "empty";
+                li.textContent = (market === "domestic" ? "국장" : "미장") + " 관리 종목이 없습니다.";
+                listEl.appendChild(li);
+                return;
+            }
+
+            items.forEach(item => {
+                const li = document.createElement("li");
+                li.innerHTML = `<div class="name">${item.name || item.iscd}</div>` +
+                    `<div class="meta">${item.iscd}</div>`;
+                if (selected && selected.iscd === item.iscd && selected.market_key === item.market_key) {
+                    li.classList.add("active");
+                }
+                li.addEventListener("click", () => {
+                    selected = item;
+                    document.getElementById("selected-label").textContent = `${item.name || item.iscd} (${item.iscd})`;
+                    renderList();
+                    validate();
+                });
+                listEl.appendChild(li);
+            });
+        }
+
+        // 국장/미장 탭 전환 (선택 초기화)
+        document.querySelectorAll(".tab").forEach(tab => {
+            tab.addEventListener("click", () => {
+                market = tab.dataset.market;
+                selected = null;
+                document.getElementById("selected-label").textContent = "-";
+                document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t === tab));
+                renderList();
+                validate();
+            });
+        });
+
+        document.getElementById("base-price").addEventListener("input", validate);
+        document.getElementById("target-pct").addEventListener("input", validate);
+
+        // 제출: 봇으로 감시 등록 정보를 한 번에 전송
+        document.getElementById("submit").addEventListener("click", () => {
+            if (!selected) return;
+            tg.sendData(JSON.stringify({
+                action: "monitoring_submit",
+                market: selected.market_key,
+                iscd: selected.iscd,
+                name: selected.name,
+                base_price: Number(document.getElementById("base-price").value),
+                target_pct: Number(document.getElementById("target-pct").value),
+            }));
+        });
+
+        renderList();
+    </script>
+</body>
+</html>
