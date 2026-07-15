@@ -73,14 +73,15 @@
             <input id="selected-name" type="text" readonly>
         </div>
         <div class="row">
-            <label>현재가</label>
-            <input id="current-price" type="text" readonly placeholder="종목을 선택해 주세요">
+            <label>기준가(현재가)</label>
+            <input id="base-price" type="number" step="0.01" min="0" placeholder="종목을 선택해 주세요">
         </div>
+        <div class="subinfo">초기값은 마지막 수집 현재가 — 수정하면 % 계산 기준이 바뀝니다.</div>
 
         <div class="section-title">구매 조건 (이 가격 이하일 때 매수)</div>
         <div class="mode">
             <label><input type="radio" name="th-mode" value="direct" checked> 직접 입력</label>
-            <label><input type="radio" name="th-mode" value="percent"> 현재가 대비 %</label>
+            <label><input type="radio" name="th-mode" value="percent"> 기준가 대비 %</label>
         </div>
         <div class="row" id="th-direct-row">
             <label>조건가</label>
@@ -90,8 +91,8 @@
             <label>퍼센트</label>
             <input id="th-pct" type="number" step="0.1" min="0" value="1.0">
             <select id="th-direction">
-                <option value="below" selected>% 이하 (현재가-)</option>
-                <option value="above">% 이상 (현재가+)</option>
+                <option value="below" selected>% 이하 (기준가-)</option>
+                <option value="above">% 이상 (기준가+)</option>
             </select>
         </div>
         <div id="th-info" class="subinfo" style="display:none"></div>
@@ -168,7 +169,9 @@
             market = next;
             selected = null;
             document.getElementById("selected-name").value = "";
-            document.getElementById("current-price").value = "";
+            const baseEl = document.getElementById("base-price");
+            baseEl.value = "";
+            baseEl.placeholder = "종목을 선택해 주세요";
             document.getElementById("tab-domestic").classList.toggle("active", market === "domestic");
             document.getElementById("tab-overseas").classList.toggle("active", market === "overseas");
             setSubtitle();
@@ -206,29 +209,36 @@
         function pick(row) {
             selected = row;
             document.getElementById("selected-name").value = `${row.name || row.iscd} (${row.iscd})`;
-            document.getElementById("current-price").value = "";
             const step = Number(row.price_step || (market === "overseas" ? 0.01 : 1));
             document.getElementById("th-price").step = step;
-            loadCurrentPrice();
+            document.getElementById("base-price").step = step;
+            loadBasePrice();
             renderList();
         }
 
-        // 종목 선택 시 봇이 payload에 실어 준 마지막 수집가를 표시하고,
-        // 퍼센트 조건가/예산 계산의 기준으로 쓴다.
-        function loadCurrentPrice() {
+        // 종목 선택 시 봇이 payload에 실어 준 마지막 수집가를 기준가 초기값으로
+        // 넣는다. 유저가 이 값을 바꾸면 퍼센트 조건가 계산 기준이 함께 바뀐다.
+        function loadBasePrice() {
             if (!selected) return;
+            const baseEl = document.getElementById("base-price");
             const p = Number(selected.last_price || 0);
             if (!(p > 0)) {
-                document.getElementById("current-price").value = "현재가 없음 (직접 입력 사용)";
+                baseEl.value = "";
+                baseEl.placeholder = "현재가 없음 — 기준가 직접 입력";
                 refreshComputedInfo();
                 return;
             }
-            document.getElementById("current-price").value = fmtPrice(p);
+            baseEl.value = market === "overseas" ? p.toFixed(2) : Math.round(p);
             const thEl = document.getElementById("th-price");
             if (!thEl.value) {
                 thEl.value = market === "overseas" ? p.toFixed(2) : Math.round(p);
             }
             refreshComputedInfo();
+        }
+
+        // 퍼센트 조건가 계산의 기준가(유저 수정 가능, 초기값은 마지막 수집 현재가).
+        function basePrice() {
+            return Number(document.getElementById("base-price").value || 0);
         }
 
         function radioValue(nameAttr, fallback) {
@@ -240,7 +250,7 @@
             return selected ? Number(selected.price_step || 1) : (market === "overseas" ? 0.01 : 1);
         }
 
-        // 조건가 계산: 직접 입력이면 그대로, 퍼센트면 현재가*(1±pct/100).
+        // 조건가 계산: 직접 입력이면 그대로, 퍼센트면 기준가*(1±pct/100).
         // "이하" 조건이므로 호가 단위 내림 정렬한다(서버도 다시 정렬함).
         function computeThreshold() {
             const thMode = radioValue("th-mode", "direct");
@@ -248,7 +258,7 @@
             if (thMode === "direct") {
                 value = Number(document.getElementById("th-price").value || 0);
             } else {
-                const base = selected ? Number(selected.last_price || 0) : 0;
+                const base = basePrice();
                 const pct = Number(document.getElementById("th-pct").value || 0);
                 if (!(base > 0) || !(pct >= 0)) return 0;
                 const direction = document.getElementById("th-direction").value;
@@ -266,7 +276,7 @@
             const threshold = computeThreshold();
             if (thMode === "percent") {
                 thInfo.style.display = "block";
-                thInfo.textContent = threshold > 0 ? `계산된 조건가: ${fmtPrice(threshold)}` : "계산된 조건가: - (현재가 필요)";
+                thInfo.textContent = threshold > 0 ? `계산된 조건가: ${fmtPrice(threshold)}` : "계산된 조건가: - (기준가 필요)";
             } else {
                 thInfo.style.display = "none";
             }
@@ -310,7 +320,7 @@
             }
             const threshold = computeThreshold();
             if (!(threshold > 0)) {
-                warn("조건가를 확인해 주세요 (퍼센트 방식은 현재가가 필요합니다).");
+                warn("조건가를 확인해 주세요 (퍼센트 방식은 기준가가 필요합니다).");
                 return;
             }
 
@@ -363,7 +373,7 @@
             renderList();
             document.querySelectorAll('input[name="th-mode"]').forEach((el) => el.addEventListener("change", onThModeChange));
             document.querySelectorAll('input[name="qty-mode"]').forEach((el) => el.addEventListener("change", onQtyModeChange));
-            ["th-price", "th-pct", "budget"].forEach((id) => {
+            ["base-price", "th-price", "th-pct", "budget"].forEach((id) => {
                 document.getElementById(id).addEventListener("input", refreshComputedInfo);
             });
             document.getElementById("th-direction").addEventListener("change", refreshComputedInfo);
