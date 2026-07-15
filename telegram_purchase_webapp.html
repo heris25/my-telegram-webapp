@@ -155,11 +155,24 @@
         let selected = null;
         let chartSummary = null;
 
-        function parseInitialData() {
+        // 봇이 실은 ?data= 페이로드 복원. 압축 base64url(deflate)이 기본이고,
+        // `{`로 시작하면 구형 평문 JSON으로 간주해 그대로 파싱한다(옛 메시지 호환).
+        // 서버 쪽 services/webapp_payload.py 의 encode_payload와 대응한다.
+        async function decodePayload(raw) {
+            if (raw.startsWith('{')) return JSON.parse(raw);
+            const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return JSON.parse(await new Response(stream).text());
+        }
+
+        async function parseInitialData() {
             const raw = new URLSearchParams(window.location.search).get("data");
             if (!raw) return;
             try {
-                const parsed = JSON.parse(raw);
+                const parsed = await decodePayload(raw);
                 if (parsed && parsed.action === "purchase_form") {
                     if (parsed.market === "overseas") market = "overseas";
                     rows = Array.isArray(parsed.rows) ? parsed.rows : [];
@@ -409,17 +422,19 @@
             return div.innerHTML;
         }
 
-        parseInitialData();
-        setSubtitle();
-        renderChartSummary();
-        renderList();
-        document.querySelectorAll('input[name="mode"]').forEach((el) => {
-            el.addEventListener("change", onModeChange);
-        });
-        document.getElementById("price").addEventListener("input", updateBudgetEstimatedQty);
-        document.getElementById("budget").addEventListener("input", updateBudgetEstimatedQty);
-        onModeChange();
-        if (rows.length > 0) pick(0);
+        (async function init() {
+            await parseInitialData();
+            setSubtitle();
+            renderChartSummary();
+            renderList();
+            document.querySelectorAll('input[name="mode"]').forEach((el) => {
+                el.addEventListener("change", onModeChange);
+            });
+            document.getElementById("price").addEventListener("input", updateBudgetEstimatedQty);
+            document.getElementById("budget").addEventListener("input", updateBudgetEstimatedQty);
+            onModeChange();
+            if (rows.length > 0) pick(0);
+        })();
     </script>
 </body>
 </html>

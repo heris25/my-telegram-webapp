@@ -72,14 +72,28 @@
         let market = "domestic";
         let selected = null;
 
-        // 봇이 보낸 관리 종목 목록: ?data={"action":"price_form","rows":[...]}
-        (function loadRows() {
+        // 봇이 실은 ?data= 페이로드 복원. 압축 base64url(deflate)이 기본이고,
+        // `{`로 시작하면 구형 평문 JSON으로 간주해 그대로 파싱한다(옛 메시지 호환).
+        // 서버 쪽 services/webapp_payload.py 의 encode_payload와 대응한다.
+        async function decodePayload(raw) {
+            if (raw.startsWith('{')) return JSON.parse(raw);
+            const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return JSON.parse(await new Response(stream).text());
+        }
+
+        // 봇이 보낸 관리 종목 목록: ?data=<압축 payload> {"action":"price_form","rows":[...]}
+        (async function loadRows() {
             try {
                 const raw = new URLSearchParams(window.location.search).get("data");
                 if (!raw) return;
-                const parsed = JSON.parse(raw);
+                const parsed = await decodePayload(raw);
                 if (parsed && parsed.action === "price_form" && Array.isArray(parsed.rows)) {
                     rows = parsed.rows;
+                    renderList();
                 }
             } catch (e) {
                 document.getElementById("warn").textContent = "종목 목록을 읽지 못했습니다: " + e;

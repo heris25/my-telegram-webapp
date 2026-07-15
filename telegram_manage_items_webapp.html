@@ -109,6 +109,19 @@
             return TRUTHY.includes(String(v == null ? '' : v).trim().toLowerCase());
         }
 
+        // 봇이 실은 ?data= 페이로드 복원. 압축 base64url(deflate)이 기본이고,
+        // `{`로 시작하면 구형 평문 JSON으로 간주해 그대로 파싱한다(옛 메시지 호환).
+        // 서버 쪽 services/webapp_payload.py 의 encode_payload와 대응한다.
+        async function decodePayload(raw) {
+            if (raw.startsWith('{')) return JSON.parse(raw);
+            const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return JSON.parse(await new Response(stream).text());
+        }
+
         // 거래소 라벨로 시장 구분을 판별한다. 알 수 없으면 ''.
         function marketKeyOf(exchange) {
             const up = String(exchange || '').trim().toUpperCase();
@@ -117,16 +130,17 @@
             return '';
         }
 
-        function loadInitialData() {
+        async function loadInitialData() {
             const params = new URLSearchParams(window.location.search);
             const raw = params.get('data');
             if (!raw) return;
             try {
-                const parsed = JSON.parse(raw);
+                const parsed = await decodePayload(raw);
                 rows = Array.isArray(parsed.rows) ? parsed.rows : [];
                 sheetUrl = parsed.sheetUrl || '';
             } catch (e) {
                 console.error('data 파싱 실패', e);
+                setStatus('목록을 불러오지 못했습니다: ' + e.message, true);
             }
         }
 
@@ -336,9 +350,11 @@
             return div.innerHTML;
         }
 
-        loadInitialData();
-        render();
-        loadMaster();
+        (async function init() {
+            await loadInitialData();
+            render();
+            loadMaster();
+        })();
     </script>
 </body>
 </html>
