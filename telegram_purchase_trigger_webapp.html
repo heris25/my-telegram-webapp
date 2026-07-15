@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>조건부 구매 예약</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
+        h2 { margin: 0 0 10px; }
+        .muted { color: #697789; font-size: 13px; margin-bottom: 12px; }
+        .card { background: #fff; border: 1px solid #d9e0e8; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+        .tab {
+            flex: 1; padding: 10px; border: 1px solid #ccd6e2; border-radius: 10px;
+            background: #fff; font-size: 15px; font-weight: 700; color: #4a5a6d;
+        }
+        .tab.active { background: #eaf4ff; border-color: #7fb4e8; color: #114b7c; }
+        ul { list-style: none; padding: 0; margin: 0; max-height: 220px; overflow: auto; }
+        li { padding: 10px; border-bottom: 1px solid #edf1f5; cursor: pointer; }
+        li:last-child { border-bottom: none; }
+        li.active { background: #eaf4ff; }
+        .name { font-weight: 700; }
+        .meta { font-size: 12px; color: #617184; margin-top: 3px; }
+        .row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+        .row label { min-width: 85px; font-size: 14px; }
+        input[type=text], input[type=number], select {
+            flex: 1;
+            border: 1px solid #ccd6e2;
+            border-radius: 8px;
+            padding: 8px;
+            box-sizing: border-box;
+            font-size: 14px;
+            background: #fff;
+        }
+        .load-btn {
+            border: 1px solid #7fb4e8; border-radius: 8px; background: #eaf4ff;
+            color: #114b7c; font-weight: 700; padding: 8px 10px; font-size: 13px;
+        }
+        .mode { display: flex; gap: 10px; margin-top: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+        .mode label { min-width: 0; font-size: 14px; }
+        .section-title { font-weight: 700; font-size: 14px; margin: 4px 0 2px; }
+        .subinfo { color: #617184; font-size: 12px; margin-top: -2px; margin-bottom: 6px; padding-left: 93px; }
+        #submit {
+            width: 100%;
+            border: none;
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(120deg, #0a7d4f, #169c67);
+            margin-top: 14px;
+        }
+        .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; }
+    </style>
+</head>
+<body>
+    <h2 id="title">조건부 구매 예약</h2>
+    <div class="muted" id="subtitle">시장과 종목을 선택해 주세요.</div>
+
+    <div class="tabs">
+        <button class="tab active" id="tab-domestic" onclick="setMarket('domestic')">국장</button>
+        <button class="tab" id="tab-overseas" onclick="setMarket('overseas')">미장</button>
+    </div>
+
+    <div class="card">
+        <ul id="item-list"></ul>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <label>선택 종목</label>
+            <input id="selected-name" type="text" readonly>
+        </div>
+        <div class="row">
+            <label>현재가</label>
+            <input id="current-price" type="text" readonly placeholder="현재가 로드를 눌러주세요">
+            <button class="load-btn" onclick="loadCurrentPrice()">현재가 로드</button>
+        </div>
+
+        <div class="section-title">구매 조건 (이 가격 이하일 때 매수)</div>
+        <div class="mode">
+            <label><input type="radio" name="th-mode" value="direct" checked> 직접 입력</label>
+            <label><input type="radio" name="th-mode" value="percent"> 현재가 대비 %</label>
+        </div>
+        <div class="row" id="th-direct-row">
+            <label>조건가</label>
+            <input id="th-price" type="number" step="0.01" min="0">
+        </div>
+        <div class="row" id="th-percent-row" style="display:none">
+            <label>퍼센트</label>
+            <input id="th-pct" type="number" step="0.1" min="0" value="1.0">
+            <select id="th-direction">
+                <option value="below" selected>% 이하 (현재가-)</option>
+                <option value="above">% 이상 (현재가+)</option>
+            </select>
+        </div>
+        <div id="th-info" class="subinfo" style="display:none"></div>
+
+        <div class="section-title">수량</div>
+        <div class="mode">
+            <label><input type="radio" name="qty-mode" value="qty" checked> 수량 직접 입력</label>
+            <label><input type="radio" name="qty-mode" value="budget"> 총 예산으로 계산</label>
+        </div>
+        <div class="row" id="qty-row">
+            <label>수량</label>
+            <input id="qty" type="number" step="1" min="1" value="1">
+        </div>
+        <div class="row" id="budget-row" style="display:none">
+            <label>예산</label>
+            <input id="budget" type="number" step="0.01" min="0">
+        </div>
+        <div id="budget-qty-info" class="subinfo" style="display:none"></div>
+
+        <div class="section-title">실행 방식</div>
+        <div class="mode">
+            <label><input type="radio" name="exec-mode" value="auto" checked> 자동 매수 후 알림</label>
+            <label><input type="radio" name="exec-mode" value="manual"> 알림 후 수동 확인</label>
+        </div>
+
+        <div class="warn" id="warn"></div>
+        <button id="submit" onclick="submitReservation()">조건부 구매 예약</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        let market = "domestic";
+        let items = [];      // 전체 종목(payload.items)
+        let selected = null;
+
+        // 봇이 실은 ?data= 페이로드 복원(압축 base64url deflate / 구형 평문 JSON).
+        // 서버 쪽 services/webapp_payload.py 의 encode_payload와 대응한다.
+        async function decodePayload(raw) {
+            if (raw.startsWith('{')) return JSON.parse(raw);
+            const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return JSON.parse(await new Response(stream).text());
+        }
+
+        async function parseInitialData() {
+            const raw = new URLSearchParams(window.location.search).get("data");
+            if (!raw) return;
+            try {
+                const parsed = await decodePayload(raw);
+                if (parsed && parsed.action === "purchase_trigger_form") {
+                    items = Array.isArray(parsed.items) ? parsed.items : [];
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function marketItems() {
+            return items.filter((row) => row.market_key === market);
+        }
+
+        function fmtPrice(v) {
+            const n = Number(v || 0);
+            if (market === "overseas") return `$${n.toFixed(2)}`;
+            return `${Math.round(n).toLocaleString()}원`;
+        }
+
+        function setMarket(next) {
+            market = next;
+            selected = null;
+            document.getElementById("selected-name").value = "";
+            document.getElementById("current-price").value = "";
+            document.getElementById("tab-domestic").classList.toggle("active", market === "domestic");
+            document.getElementById("tab-overseas").classList.toggle("active", market === "overseas");
+            setSubtitle();
+            renderList();
+            refreshComputedInfo();
+        }
+
+        function setSubtitle() {
+            const label = market === "overseas" ? "미장" : "국장";
+            document.getElementById("subtitle").textContent = `${label} 관리 종목 ${marketItems().length}개`;
+        }
+
+        function renderList() {
+            const ul = document.getElementById("item-list");
+            ul.innerHTML = "";
+            const rows = marketItems();
+            if (rows.length === 0) {
+                const li = document.createElement("li");
+                li.textContent = "관리 종목이 없습니다.";
+                ul.appendChild(li);
+                return;
+            }
+            rows.forEach((row) => {
+                const li = document.createElement("li");
+                if (selected && selected.iscd === row.iscd) li.classList.add("active");
+                const priceText = Number(row.last_price || 0) > 0 ? fmtPrice(row.last_price) : "현재가 없음";
+                li.innerHTML =
+                    `<div class="name">${escapeHtml(row.name || row.iscd)} (${escapeHtml(row.iscd || "")})</div>` +
+                    `<div class="meta">${escapeHtml(row.exchange || "")} · 마지막 수집가 ${priceText}</div>`;
+                li.onclick = () => pick(row);
+                ul.appendChild(li);
+            });
+        }
+
+        function pick(row) {
+            selected = row;
+            document.getElementById("selected-name").value = `${row.name || row.iscd} (${row.iscd})`;
+            document.getElementById("current-price").value = "";
+            const step = Number(row.price_step || (market === "overseas" ? 0.01 : 1));
+            document.getElementById("th-price").step = step;
+            loadCurrentPrice();
+            renderList();
+        }
+
+        // "현재가 로드": 봇이 payload에 실어 준 마지막 수집가를 표시하고,
+        // 퍼센트 조건가/예산 계산의 기준으로 쓴다.
+        function loadCurrentPrice() {
+            warn("");
+            if (!selected) {
+                warn("종목을 먼저 선택해 주세요.");
+                return;
+            }
+            const p = Number(selected.last_price || 0);
+            if (!(p > 0)) {
+                document.getElementById("current-price").value = "현재가 없음 (직접 입력 사용)";
+                refreshComputedInfo();
+                return;
+            }
+            document.getElementById("current-price").value = fmtPrice(p);
+            const thEl = document.getElementById("th-price");
+            if (!thEl.value) {
+                thEl.value = market === "overseas" ? p.toFixed(2) : Math.round(p);
+            }
+            refreshComputedInfo();
+        }
+
+        function radioValue(nameAttr, fallback) {
+            const el = document.querySelector(`input[name="${nameAttr}"]:checked`);
+            return el ? el.value : fallback;
+        }
+
+        function priceStep() {
+            return selected ? Number(selected.price_step || 1) : (market === "overseas" ? 0.01 : 1);
+        }
+
+        // 조건가 계산: 직접 입력이면 그대로, 퍼센트면 현재가*(1±pct/100).
+        // "이하" 조건이므로 호가 단위 내림 정렬한다(서버도 다시 정렬함).
+        function computeThreshold() {
+            const thMode = radioValue("th-mode", "direct");
+            let value = 0;
+            if (thMode === "direct") {
+                value = Number(document.getElementById("th-price").value || 0);
+            } else {
+                const base = selected ? Number(selected.last_price || 0) : 0;
+                const pct = Number(document.getElementById("th-pct").value || 0);
+                if (!(base > 0) || !(pct >= 0)) return 0;
+                const direction = document.getElementById("th-direction").value;
+                value = direction === "above" ? base * (1 + pct / 100) : base * (1 - pct / 100);
+            }
+            if (!(value > 0)) return 0;
+            const step = priceStep();
+            const aligned = Math.floor(value / step) * step;
+            return market === "overseas" ? Number(aligned.toFixed(2)) : Math.round(aligned);
+        }
+
+        function refreshComputedInfo() {
+            const thMode = radioValue("th-mode", "direct");
+            const thInfo = document.getElementById("th-info");
+            const threshold = computeThreshold();
+            if (thMode === "percent") {
+                thInfo.style.display = "block";
+                thInfo.textContent = threshold > 0 ? `계산된 조건가: ${fmtPrice(threshold)}` : "계산된 조건가: - (현재가 필요)";
+            } else {
+                thInfo.style.display = "none";
+            }
+
+            const qtyMode = radioValue("qty-mode", "qty");
+            const info = document.getElementById("budget-qty-info");
+            info.style.display = qtyMode === "budget" ? "block" : "none";
+            if (qtyMode === "budget") {
+                const budget = Number(document.getElementById("budget").value || 0);
+                if (threshold > 0 && budget > 0) {
+                    info.textContent = `예상 수량: ${Math.floor(budget / threshold).toLocaleString()}주 (조건가 기준)`;
+                } else {
+                    info.textContent = "예상 수량: - (조건가/예산 필요)";
+                }
+            }
+        }
+
+        function onThModeChange() {
+            const thMode = radioValue("th-mode", "direct");
+            document.getElementById("th-direct-row").style.display = thMode === "direct" ? "flex" : "none";
+            document.getElementById("th-percent-row").style.display = thMode === "percent" ? "flex" : "none";
+            refreshComputedInfo();
+        }
+
+        function onQtyModeChange() {
+            const qtyMode = radioValue("qty-mode", "qty");
+            document.getElementById("qty-row").style.display = qtyMode === "qty" ? "flex" : "none";
+            document.getElementById("budget-row").style.display = qtyMode === "budget" ? "flex" : "none";
+            refreshComputedInfo();
+        }
+
+        function warn(msg) {
+            document.getElementById("warn").textContent = msg || "";
+        }
+
+        function submitReservation() {
+            warn("");
+            if (!selected) {
+                warn("종목을 먼저 선택해 주세요.");
+                return;
+            }
+            const threshold = computeThreshold();
+            if (!(threshold > 0)) {
+                warn("조건가를 확인해 주세요 (퍼센트 방식은 현재가가 필요합니다).");
+                return;
+            }
+
+            const qtyMode = radioValue("qty-mode", "qty");
+            const payload = {
+                action: "purchase_trigger_submit",
+                market: market,
+                item: {
+                    iscd: selected.iscd,
+                    name: selected.name,
+                    exchange: selected.exchange || "",
+                },
+                threshold_price: threshold,
+                mode: qtyMode,
+                exec_mode: radioValue("exec-mode", "auto"),
+            };
+
+            if (qtyMode === "qty") {
+                const qty = Number(document.getElementById("qty").value || 0);
+                if (!Number.isInteger(qty) || qty <= 0) {
+                    warn("수량은 1 이상의 정수여야 합니다.");
+                    return;
+                }
+                payload.quantity = qty;
+            } else {
+                const budget = Number(document.getElementById("budget").value || 0);
+                if (!(budget > 0)) {
+                    warn("예산은 0보다 커야 합니다.");
+                    return;
+                }
+                if (Math.floor(budget / threshold) <= 0) {
+                    warn("예산이 너무 작아 1주도 매수할 수 없습니다.");
+                    return;
+                }
+                payload.budget = budget;
+            }
+
+            tg.sendData(JSON.stringify(payload));
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement("div");
+            div.textContent = text == null ? "" : String(text);
+            return div.innerHTML;
+        }
+
+        (async function init() {
+            await parseInitialData();
+            setSubtitle();
+            renderList();
+            document.querySelectorAll('input[name="th-mode"]').forEach((el) => el.addEventListener("change", onThModeChange));
+            document.querySelectorAll('input[name="qty-mode"]').forEach((el) => el.addEventListener("change", onQtyModeChange));
+            ["th-price", "th-pct", "budget"].forEach((id) => {
+                document.getElementById(id).addEventListener("input", refreshComputedInfo);
+            });
+            document.getElementById("th-direction").addEventListener("change", refreshComputedInfo);
+            onThModeChange();
+            onQtyModeChange();
+            const first = marketItems()[0];
+            if (first) pick(first);
+        })();
+    </script>
+</body>
+</html>
