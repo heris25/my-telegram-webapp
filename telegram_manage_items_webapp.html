@@ -24,6 +24,8 @@
         .badge { font-size: 0.72em; padding: 1px 6px; border-radius: 8px; color: #fff; }
         .badge.dom { background: #16a085; }
         .badge.ovs { background: #8e44ad; }
+        .badge.new { background: #e67e22; }
+        #save:disabled { opacity: 0.45; }
         .add-box { margin-top: 8px; padding: 12px; border: 1px solid #ccc; border-radius: 6px; }
         .add-box label { display: block; margin-top: 8px; font-weight: bold; }
         .add-box .chk { font-weight: normal; }
@@ -90,7 +92,9 @@
 
         // 봇이 URL의 ?data= 로 실어 보낸 현재 목록/시트 URL.
         // 형식: {"action":"manage_items","rows":[{market_key,exchange,iscd,name,is_used,regular_only},...],"sheetUrl":"..."}
-        let rows = [];
+        let existing = [];                 // 봇(캐시)이 보낸 현재 목록
+        let adds = [];                     // 이번 세션에 추가한 행(신규)
+        const deletedNames = new Set();    // 이번 세션에 삭제 표시한 기존 행 이름
         let sheetUrl = '';
 
         // 국장/미장 종목 마스터(브라우저 조회용). 두 파일을 합쳐 한 목록으로 검색한다.
@@ -136,7 +140,7 @@
             if (!raw) return;
             try {
                 const parsed = await decodePayload(raw);
-                rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+                existing = Array.isArray(parsed.rows) ? parsed.rows : [];
                 sheetUrl = parsed.sheetUrl || '';
             } catch (e) {
                 console.error('data 파싱 실패', e);
@@ -248,17 +252,39 @@
             box.innerHTML = '';
         }
 
+        // 화면에 보여줄 목록: 기존 행(삭제 표시 제외) + 이번에 추가한 행(신규 표시).
+        function displayItems() {
+            const items = [];
+            existing.forEach(row => {
+                if (!deletedNames.has(row.name)) items.push({ row: row, isNew: false });
+            });
+            adds.forEach(row => items.push({ row: row, isNew: true }));
+            return items;
+        }
+
+        function updateSaveButton() {
+            const btn = document.getElementById('save');
+            const parts = [];
+            if (adds.length > 0) parts.push(`추가 ${adds.length}`);
+            if (deletedNames.size > 0) parts.push(`삭제 ${deletedNames.size}`);
+            btn.disabled = parts.length === 0;
+            btn.textContent = parts.length > 0 ? `💾 저장 (${parts.join(' · ')})` : '💾 저장 (변경 없음)';
+        }
+
         function render() {
             const ul = document.getElementById('list');
             ul.innerHTML = '';
-            if (rows.length === 0) {
+            const items = displayItems();
+            if (items.length === 0) {
                 const li = document.createElement('li');
                 li.className = 'empty';
                 li.textContent = '등록된 항목이 없습니다.';
                 ul.appendChild(li);
+                updateSaveButton();
                 return;
             }
-            rows.forEach((row, idx) => {
+            items.forEach((entry, idx) => {
+                const row = entry.row;
                 const li = document.createElement('li');
 
                 const cb = document.createElement('input');
@@ -273,30 +299,40 @@
                 const mk = marketKeyOf(row.exchange) || row.market_key;
                 const badgeClass = mk === 'overseas' ? 'ovs' : 'dom';
                 const badgeLabel = mk === 'overseas' ? '미장' : '국장';
+                const newBadge = entry.isNew ? ' <span class="badge new">신규</span>' : '';
                 info.innerHTML =
                     `<div class="nm">${escapeHtml(nameText)} ` +
-                    `<span class="badge ${badgeClass}">${badgeLabel}</span></div>` +
+                    `<span class="badge ${badgeClass}">${badgeLabel}</span>${newBadge}</div>` +
                     `<div class="code">${escapeHtml(codeText)}</div>`;
 
                 li.appendChild(cb);
                 li.appendChild(info);
                 ul.appendChild(li);
             });
+            updateSaveButton();
         }
 
-        // 항목 삭제: 체크된 항목(여러 개)을 목록에서 제거한다.
+        // 항목 삭제: 체크된 항목(여러 개)을 삭제 대기로 표시한다("저장"으로 최종 반영).
+        // 이번 세션에 추가한 항목이면 추가 목록에서만 뺀다(시트 요청 없음).
         function deleteSelected() {
-            const checked = Array.from(document.querySelectorAll('.sel:checked'))
+            const checkedIdx = Array.from(document.querySelectorAll('.sel:checked'))
                 .map(cb => Number(cb.dataset.idx));
-            if (checked.length === 0) {
+            if (checkedIdx.length === 0) {
                 alert('삭제할 항목을 먼저 선택하세요(체크박스).');
                 return;
             }
-            if (!confirm(`선택한 ${checked.length}개 항목을 삭제할까요? ("저장"을 눌러야 최종 반영됩니다)`)) {
+            if (!confirm(`선택한 ${checkedIdx.length}개 항목을 삭제할까요? ("저장"을 눌러야 최종 반영됩니다)`)) {
                 return;
             }
-            const drop = new Set(checked);
-            rows = rows.filter((_row, idx) => !drop.has(idx));
+            const items = displayItems();
+            const dropAdds = new Set();
+            checkedIdx.forEach(idx => {
+                const entry = items[idx];
+                if (!entry) return;
+                if (entry.isNew) dropAdds.add(entry.row);
+                else deletedNames.add(entry.row.name);
+            });
+            adds = adds.filter(row => !dropAdds.has(row));
             render();
         }
 
@@ -313,14 +349,15 @@
                 setStatus('거래소를 확인해주세요(국장 KOSPI/KOSDAQ, 미장 NAS/NYS/AMS).', true);
                 return;
             }
-            // 이미 있는 이름이면 알림하고 추가하지 않는다.
-            const dupName = name.toLowerCase();
-            if (rows.some(r => String(r.name || '').trim().toLowerCase() === dupName)) {
+            // 이미 있는 이름이면 알림하고 추가하지 않는다(최종 검증은 봇이 시트 기준으로 한다).
+            const dupName = name.trim().toLowerCase();
+            const names = displayItems().map(e => String(e.row.name || '').trim().toLowerCase());
+            if (names.includes(dupName)) {
                 setStatus(`이미 있는 이름입니다: ${name}`, true);
                 alert(`이미 있는 이름입니다: ${name}`);
                 return;
             }
-            rows.push({
+            adds.push({
                 market_key: marketKey,
                 iscd: iscd,
                 name: name,
@@ -339,9 +376,17 @@
         }
 
         function save() {
-            // 최종 목록을 봇으로 전송하고 웹앱 닫기.
-            // 봇에는 message.web_app_data.data 로 이 JSON이 도착한다.
-            tg.sendData(JSON.stringify({ action: 'manage_items', rows: rows }));
+            // 변경분(추가 행 + 삭제 이름)만 봇으로 전송하고 웹앱 닫기.
+            // 봇이 시트 기준으로 검증(중복/없는 이름)한 뒤 반영한다.
+            if (adds.length === 0 && deletedNames.size === 0) {
+                alert('변경 사항이 없습니다.');
+                return;
+            }
+            tg.sendData(JSON.stringify({
+                action: 'manage_items',
+                adds: adds,
+                deletes: Array.from(deletedNames),
+            }));
         }
 
         function escapeHtml(text) {
