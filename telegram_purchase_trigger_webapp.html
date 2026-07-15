@@ -33,10 +33,9 @@
             font-size: 14px;
             background: #fff;
         }
-        .load-btn {
-            border: 1px solid #7fb4e8; border-radius: 8px; background: #eaf4ff;
-            color: #114b7c; font-weight: 700; padding: 8px 10px; font-size: 13px;
-        }
+        /* 퍼센트 입력은 "10.0" 정도만 담으면 되므로 고정 폭으로 두고,
+           남는 폭은 이하/이상 select가 차지한다(가로 넘침 방지). */
+        #th-pct { flex: 0 0 72px; width: 72px; }
         .mode { display: flex; gap: 10px; margin-top: 6px; margin-bottom: 4px; flex-wrap: wrap; }
         .mode label { min-width: 0; font-size: 14px; }
         .section-title { font-weight: 700; font-size: 14px; margin: 4px 0 2px; }
@@ -75,8 +74,7 @@
         </div>
         <div class="row">
             <label>현재가</label>
-            <input id="current-price" type="text" readonly placeholder="현재가 로드를 눌러주세요">
-            <button class="load-btn" onclick="loadCurrentPrice()">현재가 로드</button>
+            <input id="current-price" type="text" readonly placeholder="종목을 선택해 주세요">
         </div>
 
         <div class="section-title">구매 조건 (이 가격 이하일 때 매수)</div>
@@ -215,14 +213,10 @@
             renderList();
         }
 
-        // "현재가 로드": 봇이 payload에 실어 준 마지막 수집가를 표시하고,
+        // 종목 선택 시 봇이 payload에 실어 준 마지막 수집가를 표시하고,
         // 퍼센트 조건가/예산 계산의 기준으로 쓴다.
         function loadCurrentPrice() {
-            warn("");
-            if (!selected) {
-                warn("종목을 먼저 선택해 주세요.");
-                return;
-            }
+            if (!selected) return;
             const p = Number(selected.last_price || 0);
             if (!(p > 0)) {
                 document.getElementById("current-price").value = "현재가 없음 (직접 입력 사용)";
