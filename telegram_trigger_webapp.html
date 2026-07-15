@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>매수 트리거 무장</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
+        h2 { margin: 0 0 6px; }
+        .muted { color: #697789; font-size: 13px; margin-bottom: 12px; }
+        .card { background: #fff; border: 1px solid #d9e0e8; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+
+        /* 국장/미장 탭 */
+        .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+        .tab {
+            flex: 1;
+            border: 1px solid #ccd6e2;
+            border-radius: 10px;
+            background: #fff;
+            padding: 12px;
+            font-size: 15px;
+            font-weight: 700;
+            color: #4a5a6d;
+        }
+        .tab.active { background: #eaf4ff; border-color: #7db4e8; color: #14538f; }
+        .tab .cnt { font-weight: 400; font-size: 12px; color: #14538f; }
+
+        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .toolbar button { border: 1px solid #ccd6e2; border-radius: 8px; background: #fff;
+                          padding: 6px 10px; font-size: 13px; color: #4a5a6d; }
+
+        ul { list-style: none; padding: 0; margin: 0; max-height: 55vh; overflow: auto; }
+        li { display: flex; align-items: center; gap: 10px; padding: 12px 10px;
+             border-bottom: 1px solid #edf1f5; cursor: pointer; }
+        li:last-child { border-bottom: none; }
+        li.checked { background: #eaf4ff; }
+        li input[type=checkbox] { width: 18px; height: 18px; pointer-events: none; }
+        .info { flex: 1; min-width: 0; }
+        .name { font-weight: 700; }
+        .meta { font-size: 12px; color: #617184; margin-top: 3px; }
+        .empty { padding: 14px 10px; color: #8494a6; font-size: 14px; }
+
+        #submit {
+            width: 100%;
+            border: none;
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(120deg, #1257a0, #2f7fd1);
+        }
+        #submit:disabled { opacity: 0.45; }
+        .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <h2>🎯 매수 트리거 무장</h2>
+    <div class="muted">시장을 고르고, 무장할 종목을 체크한 뒤 아래 버튼을 누르세요. 두 시장을 함께 골라도 됩니다.</div>
+
+    <div class="tabs">
+        <button type="button" class="tab active" data-market="domestic">국장 <span class="cnt" id="cnt-domestic"></span></button>
+        <button type="button" class="tab" data-market="overseas">미장 <span class="cnt" id="cnt-overseas"></span></button>
+    </div>
+
+    <div class="card">
+        <div class="toolbar">
+            <span class="muted" id="tab-label">국장 종목</span>
+            <button type="button" id="toggle-all">전체 선택</button>
+        </div>
+        <ul id="item-list"></ul>
+    </div>
+
+    <button id="submit" disabled>트리거 무장</button>
+    <div class="warn" id="warn"></div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        let rows = [];          // [{market_key, iscd, name}]
+        let market = "domestic";
+        const checked = new Set();   // 선택된 종목 키("market_key:iscd"), 탭 전환에도 유지
+
+        // 봇이 실은 ?data= 페이로드 복원. 압축 base64url(deflate)이 기본이고,
+        // `{`로 시작하면 구형 평문 JSON으로 간주해 그대로 파싱한다(옛 메시지 호환).
+        // 서버 쪽 services/webapp_payload.py 의 encode_payload와 대응한다.
+        async function decodePayload(raw) {
+            if (raw.startsWith('{')) return JSON.parse(raw);
+            const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return JSON.parse(await new Response(stream).text());
+        }
+
+        function keyOf(item) { return item.market_key + ":" + item.iscd; }
+
+        function currentItems() { return rows.filter(r => r.market_key === market); }
+
+        function updateControls() {
+            const total = checked.size;
+            const submit = document.getElementById("submit");
+            submit.disabled = total === 0;
+            submit.textContent = total > 0 ? `트리거 무장 (${total}개)` : "트리거 무장";
+
+            // 탭별 선택 수 뱃지.
+            for (const mk of ["domestic", "overseas"]) {
+                const n = rows.filter(r => r.market_key === mk && checked.has(keyOf(r))).length;
+                document.getElementById("cnt-" + mk).textContent = n > 0 ? `(${n})` : "";
+            }
+
+            // 전체 선택/해제 라벨(현재 탭 기준).
+            const items = currentItems();
+            const allChecked = items.length > 0 && items.every(it => checked.has(keyOf(it)));
+            document.getElementById("toggle-all").textContent = allChecked ? "전체 해제" : "전체 선택";
+            document.getElementById("tab-label").textContent = (market === "domestic" ? "국장" : "미장") + " 종목";
+        }
+
+        function renderList() {
+            const listEl = document.getElementById("item-list");
+            listEl.innerHTML = "";
+
+            const items = currentItems();
+            if (items.length === 0) {
+                const li = document.createElement("li");
+                li.className = "empty";
+                li.textContent = (market === "domestic" ? "국장" : "미장") + " 관리 종목이 없습니다.";
+                listEl.appendChild(li);
+                updateControls();
+                return;
+            }
+
+            items.forEach(item => {
+                const li = document.createElement("li");
+                const isChecked = checked.has(keyOf(item));
+                if (isChecked) li.classList.add("checked");
+
+                const cb = document.createElement("input");
+                cb.type = "checkbox";
+                cb.checked = isChecked;
+
+                const info = document.createElement("div");
+                info.className = "info";
+                info.innerHTML = `<div class="name">${item.name || item.iscd}</div>` +
+                    `<div class="meta">${item.iscd}</div>`;
+
+                li.appendChild(cb);
+                li.appendChild(info);
+                li.addEventListener("click", () => {
+                    const k = keyOf(item);
+                    if (checked.has(k)) checked.delete(k); else checked.add(k);
+                    renderList();
+                });
+                listEl.appendChild(li);
+            });
+            updateControls();
+        }
+
+        // 봇이 보낸 관리 종목 목록: ?data=<압축 payload> {"action":"trigger_form","rows":[...]}
+        (async function loadRows() {
+            try {
+                const raw = new URLSearchParams(window.location.search).get("data");
+                if (!raw) return;
+                const parsed = await decodePayload(raw);
+                if (parsed && parsed.action === "trigger_form" && Array.isArray(parsed.rows)) {
+                    rows = parsed.rows;
+                    renderList();
+                }
+            } catch (e) {
+                document.getElementById("warn").textContent = "종목 목록을 읽지 못했습니다: " + e;
+            }
+        })();
+
+        // 국장/미장 탭 전환(선택은 유지).
+        document.querySelectorAll(".tab").forEach(tab => {
+            tab.addEventListener("click", () => {
+                market = tab.dataset.market;
+                document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t === tab));
+                renderList();
+            });
+        });
+
+        // 현재 탭 전체 선택/해제.
+        document.getElementById("toggle-all").addEventListener("click", () => {
+            const items = currentItems();
+            const allChecked = items.length > 0 && items.every(it => checked.has(keyOf(it)));
+            items.forEach(it => {
+                if (allChecked) checked.delete(keyOf(it)); else checked.add(keyOf(it));
+            });
+            renderList();
+        });
+
+        // 제출: 체크한 종목(두 시장 합산)을 봇으로 전송 → 봇이 트리거 무장.
+        document.getElementById("submit").addEventListener("click", () => {
+            const items = rows.filter(r => checked.has(keyOf(r)))
+                .map(r => ({ market_key: r.market_key, iscd: r.iscd, name: r.name }));
+            if (items.length === 0) return;
+            tg.sendData(JSON.stringify({ action: "trigger_submit", items: items }));
+        });
+
+        renderList();
+    </script>
+</body>
+</html>
