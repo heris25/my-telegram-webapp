@@ -61,12 +61,6 @@
     <div id="add-box" class="add-box" style="display:none">
         <strong>항목 추가</strong>
 
-        <label for="iscd">종목코드 (iscd)</label>
-        <div class="field">
-            <input type="text" id="iscd" placeholder="예: 005930 / AAPL">
-            <button onclick="lookupByCode()">확인</button>
-        </div>
-
         <label for="name">종목명 (name)</label>
         <div class="field">
             <input type="text" id="name" placeholder="예: 삼성전자 / 애플">
@@ -74,6 +68,12 @@
         </div>
 
         <div id="candidates" class="candidates" style="display:none"></div>
+
+        <label for="iscd">종목코드 (iscd)</label>
+        <div class="field">
+            <input type="text" id="iscd" placeholder="예: 005930 / AAPL">
+            <button onclick="lookupByCode()">확인</button>
+        </div>
 
         <label for="exchange">거래소 (exchange)</label>
         <div class="field">
@@ -215,7 +215,7 @@
             const box = document.getElementById('add-box');
             box.style.display = (mode === 'add') ? 'block' : 'none';
             if (mode === 'add') {
-                document.getElementById('iscd').focus();
+                document.getElementById('name').focus();
             } else {
                 clearAddInputs();
             }
