@@ -14,6 +14,7 @@
         .act-add { background: #2ecc71; }
         .act-del { background: #e74c3c; }
         .act-edit { background: #3498db; }
+        .act-reload { background: #f39c12; }
         ul { list-style: none; padding: 0; }
         li { display: flex; align-items: center; gap: 8px;
              padding: 8px; border-bottom: 1px solid #ddd; }
@@ -54,6 +55,7 @@
         <button class="act-add" onclick="toggleAdd()">➕ 항목 추가</button>
         <button class="act-del" onclick="toggleDelete()">🗑 항목 삭제</button>
         <button class="act-edit" onclick="openSheet()">✏️ 항목 수정</button>
+        <button class="act-reload" onclick="requestReload()">🔄 갱신</button>
     </div>
 
     <div id="add-box" class="add-box" style="display:none">
@@ -225,6 +227,16 @@
 
         function toggleAdd() { setMode(mode === 'add' ? 'view' : 'add'); }
         function toggleDelete() { setMode(mode === 'delete' ? 'view' : 'delete'); }
+
+        // 갱신: 봇에게 구글시트 다시 읽기(리로드)를 요청한다. sendData는 웹앱을
+        // 닫으므로, 봇이 갱신된 목록을 실은 웹앱 버튼을 다시 보내준다.
+        function requestReload() {
+            if (adds.length > 0
+                && !confirm(`저장하지 않은 추가 항목 ${adds.length}개가 있습니다. 버리고 갱신할까요?`)) {
+                return;
+            }
+            tg.sendData(JSON.stringify({ action: 'manage_items', reload: true }));
+        }
 
         // 항목 수정: 공유된 구글시트를 브라우저로 연다(직접 편집).
         function openSheet() {
