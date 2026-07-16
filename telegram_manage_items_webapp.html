@@ -33,8 +33,11 @@
         .field input[type=text] { flex: 1; padding: 8px; box-sizing: border-box; }
         .field button { padding: 8px 12px; white-space: nowrap; }
         button.primary { margin-top: 12px; padding: 10px 16px; width: 100%; font-size: 15px; }
-        #save { margin-top: 20px; padding: 14px; width: 100%; font-size: 16px;
-                background: #2ecc71; color: #fff; border: none; border-radius: 6px; }
+        #save { margin-top: 12px; margin-bottom: 12px; padding: 14px; width: 100%;
+                font-size: 16px; background: #2ecc71; color: #fff; border: none;
+                border-radius: 6px; }
+        .mode-hint { margin-top: 8px; padding: 8px; font-size: 0.9em; color: #c0392b;
+                     background: #fdecea; border-radius: 6px; }
         .empty { color: #888; padding: 8px 0; }
         .candidates { margin-top: 8px; border: 1px solid #ddd; border-radius: 4px; }
         .candidates .cand { padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
@@ -49,7 +52,7 @@
 
     <div class="actions">
         <button class="act-add" onclick="toggleAdd()">➕ 항목 추가</button>
-        <button class="act-del" onclick="deleteSelected()">🗑 항목 삭제</button>
+        <button class="act-del" onclick="toggleDelete()">🗑 항목 삭제</button>
         <button class="act-edit" onclick="openSheet()">✏️ 항목 수정</button>
     </div>
 
@@ -84,9 +87,11 @@
         <div id="status" class="status"></div>
     </div>
 
-    <ul id="list"></ul>
+    <div id="mode-hint" class="mode-hint" style="display:none"></div>
 
     <button id="save" onclick="save()">💾 저장</button>
+
+    <ul id="list"></ul>
 
     <script>
         const tg = window.Telegram.WebApp;
@@ -97,8 +102,8 @@
         // (추가 기본값은 이 웹앱이 시장별로 정하고, 삭제는 이름 기준, 수정은 시트 URL —
         //  그래서 세부 필드 없이 이름만 받는다.)
         let existingNames = [];            // 봇(캐시)이 보낸 현재 항목 이름들
-        let adds = [];                     // 이번 세션에 추가한 행(신규)
-        const deletedNames = new Set();    // 이번 세션에 삭제 표시한 기존 항목 이름
+        let adds = [];                     // 추가 모드에서 쌓은 신규 행(저장 전)
+        let mode = 'view';                 // 'view' | 'add' | 'delete' (추가/삭제는 배타 모드)
         let sheetUrl = '';
 
         // 국장/미장 종목 마스터(브라우저 조회용). 두 파일을 합쳐 한 목록으로 검색한다.
@@ -183,13 +188,43 @@
             el.className = 'status' + (isError ? ' error' : '');
         }
 
-        function toggleAdd() {
-            const box = document.getElementById('add-box');
-            box.style.display = (box.style.display === 'none') ? 'block' : 'none';
-            if (box.style.display === 'block') {
-                document.getElementById('iscd').focus();
-            }
+        function clearAddInputs() {
+            document.getElementById('iscd').value = '';
+            document.getElementById('name').value = '';
+            document.getElementById('exchange').value = '';
+            document.getElementById('new-is-used').checked = true;
+            document.getElementById('new-regular-only').checked = false;
+            document.getElementById('new-auto-buy').checked = true;
+            document.getElementById('new-auto-sell').checked = true;
+            hideCandidates();
+            setStatus('');
         }
+
+        // 모드 전환. 추가/삭제는 배타적 — 삭제 모드 진입 시 추가 폼을 비우고 닫는다.
+        // 저장하지 않은 추가분이 있으면 확인 후 버린다(모드별로 저장을 분리하기 때문).
+        function setMode(next) {
+            if (next === 'delete' && adds.length > 0) {
+                if (!confirm(`저장하지 않은 추가 항목 ${adds.length}개가 있습니다. 버리고 삭제 모드로 전환할까요?`)) {
+                    return;
+                }
+                adds = [];
+            }
+            mode = next;
+            const box = document.getElementById('add-box');
+            box.style.display = (mode === 'add') ? 'block' : 'none';
+            if (mode === 'add') {
+                document.getElementById('iscd').focus();
+            } else {
+                clearAddInputs();
+            }
+            const hint = document.getElementById('mode-hint');
+            hint.style.display = (mode === 'delete') ? 'block' : 'none';
+            hint.textContent = '🗑 삭제할 항목을 체크한 뒤 저장을 누르세요.';
+            render();
+        }
+
+        function toggleAdd() { setMode(mode === 'add' ? 'view' : 'add'); }
+        function toggleDelete() { setMode(mode === 'delete' ? 'view' : 'delete'); }
 
         // 항목 수정: 공유된 구글시트를 브라우저로 연다(직접 편집).
         function openSheet() {
@@ -260,24 +295,34 @@
             box.innerHTML = '';
         }
 
-        // 화면에 보여줄 목록: 기존 항목 이름(삭제 표시 제외) + 이번에 추가한 행(신규 표시).
+        // 화면에 보여줄 목록: 기존 항목 이름 + 추가 모드에서 쌓은 행(신규 표시).
         // 기존 항목은 이름만 안다(세부 필드는 봇/시트가 관리).
         function displayItems() {
             const items = [];
-            existingNames.forEach(name => {
-                if (!deletedNames.has(name)) items.push({ name: name, row: null, isNew: false });
-            });
+            existingNames.forEach(name => items.push({ name: name, row: null, isNew: false }));
             adds.forEach(row => items.push({ name: row.name, row: row, isNew: true }));
             return items;
         }
 
+        function checkedNames() {
+            return Array.from(document.querySelectorAll('.sel:checked'))
+                .map(cb => cb.dataset.name);
+        }
+
+        // 저장 버튼은 모드별로 분리: 추가 모드 = 추가분 전송, 삭제 모드 = 체크된 항목 삭제.
         function updateSaveButton() {
             const btn = document.getElementById('save');
-            const parts = [];
-            if (adds.length > 0) parts.push(`추가 ${adds.length}`);
-            if (deletedNames.size > 0) parts.push(`삭제 ${deletedNames.size}`);
-            btn.disabled = parts.length === 0;
-            btn.textContent = parts.length > 0 ? `💾 저장 (${parts.join(' · ')})` : '💾 저장 (변경 없음)';
+            if (mode === 'add') {
+                btn.disabled = adds.length === 0;
+                btn.textContent = adds.length > 0 ? `💾 저장 (추가 ${adds.length})` : '💾 저장 (추가할 항목 없음)';
+            } else if (mode === 'delete') {
+                const n = checkedNames().length;
+                btn.disabled = n === 0;
+                btn.textContent = n > 0 ? `💾 저장 (삭제 ${n})` : '💾 저장 (삭제할 항목 선택)';
+            } else {
+                btn.disabled = true;
+                btn.textContent = '💾 저장 (추가/삭제 버튼으로 시작)';
+            }
         }
 
         function render() {
@@ -292,13 +337,18 @@
                 updateSaveButton();
                 return;
             }
-            items.forEach((entry, idx) => {
+            items.forEach(entry => {
                 const li = document.createElement('li');
 
-                const cb = document.createElement('input');
-                cb.type = 'checkbox';
-                cb.dataset.idx = idx;
-                cb.className = 'sel';
+                // 체크박스는 삭제 모드에서만 보여준다(평소에는 이름만).
+                let cb = null;
+                if (mode === 'delete') {
+                    cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.dataset.name = entry.name;
+                    cb.className = 'sel';
+                    cb.onchange = updateSaveButton;
+                }
 
                 const info = document.createElement('div');
                 info.className = 'info';
@@ -323,35 +373,11 @@
                     info.innerHTML = `<div class="nm">${escapeHtml(nameText)}</div>`;
                 }
 
-                li.appendChild(cb);
+                if (cb) li.appendChild(cb);
                 li.appendChild(info);
                 ul.appendChild(li);
             });
             updateSaveButton();
-        }
-
-        // 항목 삭제: 체크된 항목(여러 개)을 삭제 대기로 표시한다("저장"으로 최종 반영).
-        // 이번 세션에 추가한 항목이면 추가 목록에서만 뺀다(시트 요청 없음).
-        function deleteSelected() {
-            const checkedIdx = Array.from(document.querySelectorAll('.sel:checked'))
-                .map(cb => Number(cb.dataset.idx));
-            if (checkedIdx.length === 0) {
-                alert('삭제할 항목을 먼저 선택하세요(체크박스).');
-                return;
-            }
-            if (!confirm(`선택한 ${checkedIdx.length}개 항목을 삭제할까요? ("저장"을 눌러야 최종 반영됩니다)`)) {
-                return;
-            }
-            const items = displayItems();
-            const dropAdds = new Set();
-            checkedIdx.forEach(idx => {
-                const entry = items[idx];
-                if (!entry) return;
-                if (entry.isNew) dropAdds.add(entry.row);
-                else deletedNames.add(entry.name);
-            });
-            adds = adds.filter(row => !dropAdds.has(row));
-            render();
         }
 
         function addRow() {
@@ -385,30 +411,31 @@
                 auto_buy: document.getElementById('new-auto-buy').checked ? 'TRUE' : 'FALSE',
                 auto_sell: document.getElementById('new-auto-sell').checked ? 'TRUE' : 'FALSE',
             });
-            document.getElementById('iscd').value = '';
-            document.getElementById('name').value = '';
-            document.getElementById('exchange').value = '';
-            document.getElementById('new-is-used').checked = true;
-            document.getElementById('new-regular-only').checked = false;
-            document.getElementById('new-auto-buy').checked = true;
-            document.getElementById('new-auto-sell').checked = true;
-            hideCandidates();
+            clearAddInputs();
             setStatus(`추가됨: ${name} · ${iscd} (${exchange})`);
             render();
         }
 
+        // 저장: 현재 모드의 변경분만 봇으로 전송하고 웹앱 닫기.
+        // (추가 모드 = adds만, 삭제 모드 = 체크된 이름만. 봇이 시트 기준으로 검증한다.)
         function save() {
-            // 변경분(추가 행 + 삭제 이름)만 봇으로 전송하고 웹앱 닫기.
-            // 봇이 시트 기준으로 검증(중복/없는 이름)한 뒤 반영한다.
-            if (adds.length === 0 && deletedNames.size === 0) {
-                alert('변경 사항이 없습니다.');
+            if (mode === 'add') {
+                if (adds.length === 0) { alert('추가한 항목이 없습니다.'); return; }
+                tg.sendData(JSON.stringify({
+                    action: 'manage_items', adds: adds, deletes: [],
+                }));
                 return;
             }
-            tg.sendData(JSON.stringify({
-                action: 'manage_items',
-                adds: adds,
-                deletes: Array.from(deletedNames),
-            }));
+            if (mode === 'delete') {
+                const names = checkedNames();
+                if (names.length === 0) { alert('삭제할 항목을 먼저 선택하세요(체크박스).'); return; }
+                if (!confirm(`선택한 ${names.length}개 항목을 삭제할까요?`)) return;
+                tg.sendData(JSON.stringify({
+                    action: 'manage_items', adds: [], deletes: names,
+                }));
+                return;
+            }
+            alert('먼저 [항목 추가] 또는 [항목 삭제] 버튼으로 시작하세요.');
         }
 
         function escapeHtml(text) {
