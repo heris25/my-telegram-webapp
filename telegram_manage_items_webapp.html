@@ -77,6 +77,8 @@
 
         <label class="chk"><input type="checkbox" id="new-is-used" checked> 사용 (is_used)</label>
         <label class="chk"><input type="checkbox" id="new-regular-only"> 정규장 전용 (regular_only)</label>
+        <label class="chk"><input type="checkbox" id="new-auto-buy" checked> 자동 매수 (auto_buy)</label>
+        <label class="chk"><input type="checkbox" id="new-auto-sell" checked> 자동 매도 (auto_sell)</label>
 
         <button class="primary act-add" onclick="addRow()">➕ 추가</button>
         <div id="status" class="status"></div>
@@ -304,7 +306,10 @@
                 if (entry.isNew) {
                     // 신규 항목만 세부 정보(코드/거래소/시장)를 안다.
                     const row = entry.row;
-                    const codeText = [row.iscd, row.exchange].filter(Boolean).join(' · ');
+                    const codeParts = [row.iscd, row.exchange];
+                    if (!truthy(row.auto_buy)) codeParts.push('자동매수 꺼짐');
+                    if (!truthy(row.auto_sell)) codeParts.push('자동매도 꺼짐');
+                    const codeText = codeParts.filter(Boolean).join(' · ');
                     const mk = marketKeyOf(row.exchange) || row.market_key;
                     const badgeClass = mk === 'overseas' ? 'ovs' : 'dom';
                     const badgeLabel = mk === 'overseas' ? '미장' : '국장';
@@ -377,12 +382,16 @@
                 exchange: exchange,
                 is_used: document.getElementById('new-is-used').checked ? 'TRUE' : 'FALSE',
                 regular_only: document.getElementById('new-regular-only').checked ? 'TRUE' : 'FALSE',
+                auto_buy: document.getElementById('new-auto-buy').checked ? 'TRUE' : 'FALSE',
+                auto_sell: document.getElementById('new-auto-sell').checked ? 'TRUE' : 'FALSE',
             });
             document.getElementById('iscd').value = '';
             document.getElementById('name').value = '';
             document.getElementById('exchange').value = '';
             document.getElementById('new-is-used').checked = true;
             document.getElementById('new-regular-only').checked = false;
+            document.getElementById('new-auto-buy').checked = true;
+            document.getElementById('new-auto-sell').checked = true;
             hideCandidates();
             setStatus(`추가됨: ${name} · ${iscd} (${exchange})`);
             render();
