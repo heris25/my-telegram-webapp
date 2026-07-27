@@ -8,13 +8,14 @@
     <style>
         body { font-family: sans-serif; padding: 16px; }
         h2 { margin-top: 0; }
-        .actions { display: flex; gap: 8px; margin-bottom: 12px; }
-        .actions button { flex: 1; padding: 10px 6px; font-size: 14px; border: none;
+        .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .actions button { flex: 1 1 30%; padding: 10px 4px; font-size: 13px; border: none;
                           border-radius: 6px; color: #fff; }
         .act-add { background: #2ecc71; }
         .act-del { background: #e74c3c; }
         .act-edit { background: #3498db; }
         .act-reload { background: #f39c12; }
+        .act-rec { background: #9b59b6; }
         ul { list-style: none; padding: 0; }
         li { display: flex; align-items: center; gap: 8px;
              padding: 8px; border-bottom: 1px solid #ddd; }
@@ -46,6 +47,15 @@
         .candidates .cand:hover { background: #f0f8ff; }
         .status { margin-top: 6px; font-size: 0.85em; color: #888; }
         .status.error { color: #e74c3c; }
+        .rec-meta { margin-bottom: 8px; font-size: 0.85em; color: #888; }
+        li .btns { display: flex; gap: 6px; }
+        li .btns button { padding: 6px 8px; font-size: 12px; border: none;
+                          border-radius: 6px; color: #fff; white-space: nowrap; }
+        .btn-view { background: #3498db; }
+        .btn-add { background: #2ecc71; }
+        .badge.mng { background: #7f8c8d; }
+        .rec-del-title { margin-top: 14px; padding: 8px; font-size: 0.9em; color: #c0392b;
+                         background: #fdecea; border-radius: 6px; }
     </style>
 </head>
 <body>
@@ -54,8 +64,20 @@
     <div class="actions">
         <button class="act-add" onclick="toggleAdd()">➕ 항목 추가</button>
         <button class="act-del" onclick="toggleDelete()">🗑 항목 삭제</button>
+        <button class="act-rec" onclick="toggleRecommend()">⭐ 추천</button>
         <button class="act-edit" onclick="openSheet()">✏️ 항목 수정</button>
         <button class="act-reload" onclick="requestReload()">🔄 갱신</button>
+    </div>
+
+    <div id="rec-box" style="display:none">
+        <div id="rec-meta" class="rec-meta"></div>
+        <button class="primary act-reload" onclick="requestRecommend()">🔁 추천 갱신 (수 분 소요)</button>
+        <ul id="rec-list"></ul>
+        <div id="rec-del-title" class="rec-del-title" style="display:none">
+            🗑 성과 없는 관리 종목 — 구매 이력이 없고 이번 추천에도 없는 항목입니다.
+            체크 후 저장하면 관리 목록(시트)에서 삭제됩니다.
+        </div>
+        <ul id="rec-del-list"></ul>
     </div>
 
     <div id="add-box" class="add-box" style="display:none">
@@ -99,14 +121,18 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // 봇이 URL의 ?data= 로 실어 보낸 현재 항목 이름 목록/시트 URL.
-        // 형식: {"action":"manage_items","names":["삼성전자",...],"sheetUrl":"..."}
+        // 봇이 URL의 ?data= 로 실어 보낸 현재 항목 이름 목록/시트 URL/추천 섹션.
+        // 형식: {"action":"manage_items","names":["삼성전자",...],"sheetUrl":"...",
+        //        "recommend":{"generatedAt":"...","gijun":"YYYYMMDD",
+        //                     "items":[{name,iscd,close,count,managed},...],
+        //                     "deleteNames":["...",...]}}
         // (추가 기본값은 이 웹앱이 시장별로 정하고, 삭제는 이름 기준, 수정은 시트 URL —
-        //  그래서 세부 필드 없이 이름만 받는다.)
+        //  그래서 세부 필드 없이 이름만 받는다. recommend는 봇의 추천 캐시.)
         let existingNames = [];            // 봇(캐시)이 보낸 현재 항목 이름들
         let adds = [];                     // 추가 모드에서 쌓은 신규 행(저장 전)
-        let mode = 'view';                 // 'view' | 'add' | 'delete' (추가/삭제는 배타 모드)
+        let mode = 'view';                 // 'view' | 'add' | 'delete' | 'recommend'
         let sheetUrl = '';
+        let recommend = null;              // 봇의 추천 캐시 섹션(없으면 null)
 
         // 국장/미장 종목 마스터(브라우저 조회용). 두 파일을 합쳐 한 목록으로 검색한다.
         let master = [];        // [{iscd, name, market}, ...] (market = 거래소 라벨)
@@ -157,6 +183,7 @@
                         ? parsed.rows.map(r => String(r.name || r.iscd || '')).filter(Boolean)
                         : []);
                 sheetUrl = parsed.sheetUrl || '';
+                recommend = parsed.recommend || null;
             } catch (e) {
                 console.error('data 파싱 실패', e);
                 setStatus('목록을 불러오지 못했습니다: ' + e.message, true);
@@ -204,6 +231,7 @@
 
         // 모드 전환. 추가/삭제는 배타적 — 삭제 모드 진입 시 추가 폼을 비우고 닫는다.
         // 저장하지 않은 추가분이 있으면 확인 후 버린다(모드별로 저장을 분리하기 때문).
+        // 추천 모드는 추가분을 유지한다(추천→추가 폼 프리필로 오가는 흐름이기 때문).
         function setMode(next) {
             if (next === 'delete' && adds.length > 0) {
                 if (!confirm(`저장하지 않은 추가 항목 ${adds.length}개가 있습니다. 버리고 삭제 모드로 전환할까요?`)) {
@@ -216,17 +244,22 @@
             box.style.display = (mode === 'add') ? 'block' : 'none';
             if (mode === 'add') {
                 document.getElementById('name').focus();
-            } else {
+            } else if (mode !== 'recommend') {
                 clearAddInputs();
             }
             const hint = document.getElementById('mode-hint');
             hint.style.display = (mode === 'delete') ? 'block' : 'none';
             hint.textContent = '🗑 삭제할 항목을 체크한 뒤 저장을 누르세요.';
+            // 추천 모드에서는 기존 목록 대신 추천 화면을 보여준다.
+            document.getElementById('rec-box').style.display = (mode === 'recommend') ? 'block' : 'none';
+            document.getElementById('list').style.display = (mode === 'recommend') ? 'none' : '';
+            if (mode === 'recommend') renderRecommend();
             render();
         }
 
         function toggleAdd() { setMode(mode === 'add' ? 'view' : 'add'); }
         function toggleDelete() { setMode(mode === 'delete' ? 'view' : 'delete'); }
+        function toggleRecommend() { setMode(mode === 'recommend' ? 'view' : 'recommend'); }
 
         // 갱신: 봇에게 구글시트 다시 읽기(리로드)를 요청한다. sendData는 웹앱을
         // 닫으므로, 봇이 갱신된 목록을 실은 웹앱 버튼을 다시 보내준다.
@@ -236,6 +269,102 @@
                 return;
             }
             tg.sendData(JSON.stringify({ action: 'manage_items', reload: true }));
+        }
+
+        // 추천 갱신: 봇에게 KOSPI200 추천 재계산을 요청한다. 계산은 수 분 걸리고,
+        // sendData로 웹앱이 닫히므로 완료되면 봇이 새 추천을 실은 버튼을 보내준다.
+        function requestRecommend() {
+            if (adds.length > 0
+                && !confirm(`저장하지 않은 추가 항목 ${adds.length}개가 있습니다. 버리고 추천 갱신을 요청할까요?`)) {
+                return;
+            }
+            if (!confirm('추천 계산을 시작할까요? 수 분 걸리며, 완료되면 봇이 알려줍니다.')) return;
+            tg.sendData(JSON.stringify({ action: 'manage_items', recommend: true }));
+        }
+
+        // 추천 화면: 추천 목록(상태보기/추가 버튼) + 성과 없는 관리 종목(삭제 후보).
+        function renderRecommend() {
+            const meta = document.getElementById('rec-meta');
+            if (!recommend || !recommend.generatedAt) {
+                meta.textContent = '계산된 추천이 없습니다. [추천 갱신]을 눌러 계산을 시작하세요(수 분 소요).';
+            } else {
+                meta.textContent = `계산 ${recommend.generatedAt} · 기준일 ${recommend.gijun}`
+                    + ' · 종가 10만원 미만 · 1년 -2%→+5% 기회 상위';
+            }
+
+            const ul = document.getElementById('rec-list');
+            ul.innerHTML = '';
+            const items = (recommend && recommend.items) || [];
+            items.forEach(item => {
+                const li = document.createElement('li');
+                const info = document.createElement('div');
+                info.className = 'info';
+                const mngBadge = item.managed ? ' <span class="badge mng">관리 중</span>' : '';
+                info.innerHTML =
+                    `<div class="nm">${escapeHtml(item.name)}${mngBadge}</div>` +
+                    `<div class="code">${escapeHtml(item.iscd)} · ` +
+                    `${Number(item.close).toLocaleString()}원 · 기회 ${item.count}회</div>`;
+                const btns = document.createElement('div');
+                btns.className = 'btns';
+                const viewBtn = document.createElement('button');
+                viewBtn.className = 'btn-view';
+                viewBtn.textContent = '상태보기';
+                viewBtn.onclick = () =>
+                    tg.openLink(`https://m.stock.naver.com/domestic/stock/${item.iscd}/total`);
+                btns.appendChild(viewBtn);
+                if (!item.managed) {
+                    const addBtn = document.createElement('button');
+                    addBtn.className = 'btn-add';
+                    addBtn.textContent = '추가';
+                    addBtn.onclick = () => prefillAddFromRecommend(item);
+                    btns.appendChild(addBtn);
+                }
+                li.appendChild(info);
+                li.appendChild(btns);
+                ul.appendChild(li);
+            });
+            if (recommend && recommend.generatedAt && items.length === 0) {
+                const li = document.createElement('li');
+                li.className = 'empty';
+                li.textContent = '조건에 맞는 추천 종목이 없습니다.';
+                ul.appendChild(li);
+            }
+
+            const delNames = (recommend && recommend.deleteNames) || [];
+            document.getElementById('rec-del-title').style.display = delNames.length ? 'block' : 'none';
+            const delUl = document.getElementById('rec-del-list');
+            delUl.innerHTML = '';
+            delNames.forEach(name => {
+                const li = document.createElement('li');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.dataset.name = name;
+                cb.className = 'rec-del';
+                cb.onchange = updateSaveButton;
+                const info = document.createElement('div');
+                info.className = 'info';
+                info.innerHTML = `<div class="nm">${escapeHtml(name)}</div>`;
+                li.appendChild(cb);
+                li.appendChild(info);
+                delUl.appendChild(li);
+            });
+            updateSaveButton();
+        }
+
+        // 추천 항목을 추가 폼에 채우고 추가 모드로 전환한다(거래소는 마스터에서 역조회).
+        function prefillAddFromRecommend(item) {
+            setMode('add');
+            document.getElementById('iscd').value = item.iscd;
+            document.getElementById('name').value = item.name;
+            const hit = masterByCode[item.iscd];
+            document.getElementById('exchange').value = (hit && hit.market) || 'KOSPI';
+            document.getElementById('new-regular-only').checked = false;  // 국장 기본
+            setStatus(`추천에서 선택: ${item.name} · ${item.iscd} — [➕ 추가]를 눌러 목록에 담으세요.`);
+        }
+
+        function checkedRecDeleteNames() {
+            return Array.from(document.querySelectorAll('.rec-del:checked'))
+                .map(cb => cb.dataset.name);
         }
 
         // 항목 수정: 공유된 구글시트를 브라우저로 연다(직접 편집).
@@ -331,6 +460,10 @@
                 const n = checkedNames().length;
                 btn.disabled = n === 0;
                 btn.textContent = n > 0 ? `💾 저장 (삭제 ${n})` : '💾 저장 (삭제할 항목 선택)';
+            } else if (mode === 'recommend') {
+                const n = checkedRecDeleteNames().length;
+                btn.disabled = n === 0;
+                btn.textContent = n > 0 ? `💾 저장 (삭제 ${n})` : '💾 저장 (삭제할 후보 선택)';
             } else {
                 btn.disabled = true;
                 btn.textContent = '💾 저장 (추가/삭제 버튼으로 시작)';
@@ -442,6 +575,16 @@
                 const names = checkedNames();
                 if (names.length === 0) { alert('삭제할 항목을 먼저 선택하세요(체크박스).'); return; }
                 if (!confirm(`선택한 ${names.length}개 항목을 삭제할까요?`)) return;
+                tg.sendData(JSON.stringify({
+                    action: 'manage_items', adds: [], deletes: names,
+                }));
+                return;
+            }
+            if (mode === 'recommend') {
+                // 성과 없는 관리 종목 삭제(기존 삭제 플로우 재사용 — 봇이 시트 기준 검증).
+                const names = checkedRecDeleteNames();
+                if (names.length === 0) { alert('삭제할 후보를 먼저 선택하세요(체크박스).'); return; }
+                if (!confirm(`선택한 ${names.length}개 항목을 관리 목록에서 삭제할까요?`)) return;
                 tg.sendData(JSON.stringify({
                     action: 'manage_items', adds: [], deletes: names,
                 }));
