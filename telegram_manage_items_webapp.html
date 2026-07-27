@@ -51,6 +51,7 @@
         li .btns { display: flex; gap: 6px; }
         li .btns button { padding: 6px 8px; font-size: 12px; border: none;
                           border-radius: 6px; color: #fff; white-space: nowrap; }
+        li .btns button:disabled { opacity: 0.45; }
         .btn-view { background: #3498db; }
         .btn-add { background: #2ecc71; }
         .badge.mng { background: #7f8c8d; }
@@ -133,6 +134,7 @@
         let mode = 'view';                 // 'view' | 'add' | 'delete' | 'recommend'
         let sheetUrl = '';
         let recommend = null;              // 봇의 추천 캐시 섹션(없으면 null)
+        let viewedIscds = new Set();       // 추천 탭에서 상태보기를 누른 종목(버튼 비활성 유지)
 
         // 국장/미장 종목 마스터(브라우저 조회용). 두 파일을 합쳐 한 목록으로 검색한다.
         let master = [];        // [{iscd, name, market}, ...] (market = 거래소 라벨)
@@ -231,7 +233,8 @@
 
         // 모드 전환. 추가/삭제는 배타적 — 삭제 모드 진입 시 추가 폼을 비우고 닫는다.
         // 저장하지 않은 추가분이 있으면 확인 후 버린다(모드별로 저장을 분리하기 때문).
-        // 추천 모드는 추가분을 유지한다(추천→추가 폼 프리필로 오가는 흐름이기 때문).
+        // 추천 모드는 추가분을 유지한다(추천 탭의 [추가]가 adds에 바로 담고, 저장 시
+        // 추가분+삭제 후보를 함께 전송하기 때문).
         function setMode(next) {
             if (next === 'delete' && adds.length > 0) {
                 if (!confirm(`저장하지 않은 추가 항목 ${adds.length}개가 있습니다. 버리고 삭제 모드로 전환할까요?`)) {
@@ -309,14 +312,20 @@
                 const viewBtn = document.createElement('button');
                 viewBtn.className = 'btn-view';
                 viewBtn.textContent = '상태보기';
-                viewBtn.onclick = () =>
+                viewBtn.disabled = viewedIscds.has(item.iscd);  // 재렌더에도 비활성 유지
+                viewBtn.onclick = () => {
+                    viewedIscds.add(item.iscd);
+                    viewBtn.disabled = true;
                     tg.openLink(`https://m.stock.naver.com/domestic/stock/${item.iscd}/total`);
+                };
                 btns.appendChild(viewBtn);
                 if (!item.managed) {
                     const addBtn = document.createElement('button');
                     addBtn.className = 'btn-add';
-                    addBtn.textContent = '추가';
-                    addBtn.onclick = () => prefillAddFromRecommend(item);
+                    const alreadyAdded = adds.some(row => row.iscd === item.iscd);
+                    addBtn.textContent = alreadyAdded ? '추가됨' : '추가';
+                    addBtn.disabled = alreadyAdded;
+                    addBtn.onclick = () => addFromRecommend(item, addBtn);
                     btns.appendChild(addBtn);
                 }
                 li.appendChild(info);
@@ -351,15 +360,32 @@
             updateSaveButton();
         }
 
-        // 추천 항목을 추가 폼에 채우고 추가 모드로 전환한다(거래소는 마스터에서 역조회).
-        function prefillAddFromRecommend(item) {
-            setMode('add');
-            document.getElementById('iscd').value = item.iscd;
-            document.getElementById('name').value = item.name;
+        // 추천 항목을 추가 폼 없이 **바로** 신규 행으로 담는다(국장 기본값, 거래소는
+        // 마스터 역조회). 누른 버튼은 "추가됨"으로 비활성화하고, 실제 반영은 저장 시
+        // 봇이 시트 기준으로 검증한다.
+        function addFromRecommend(item, btn) {
+            if (adds.some(row => row.iscd === item.iscd)) return;  // 중복 방지(버튼 비활성 보조)
+            const dupName = String(item.name || '').trim().toLowerCase();
+            const names = displayItems().map(e => String(e.name || '').trim().toLowerCase());
+            if (names.includes(dupName)) {
+                alert(`이미 있는 이름입니다: ${item.name}`);
+                return;
+            }
             const hit = masterByCode[item.iscd];
-            document.getElementById('exchange').value = (hit && hit.market) || 'KOSPI';
-            document.getElementById('new-regular-only').checked = false;  // 국장 기본
-            setStatus(`추천에서 선택: ${item.name} · ${item.iscd} — [➕ 추가]를 눌러 목록에 담으세요.`);
+            const exchange = (hit && hit.market) || 'KOSPI';
+            adds.push({
+                market_key: marketKeyOf(exchange) || 'domestic',
+                iscd: item.iscd,
+                name: item.name,
+                exchange: exchange,
+                is_used: 'TRUE',
+                regular_only: 'FALSE',   // 국장 기본
+                auto_buy: 'TRUE',
+                auto_sell: 'TRUE',
+            });
+            btn.textContent = '추가됨';
+            btn.disabled = true;
+            updateSaveButton();
         }
 
         function checkedRecDeleteNames() {
@@ -461,9 +487,15 @@
                 btn.disabled = n === 0;
                 btn.textContent = n > 0 ? `💾 저장 (삭제 ${n})` : '💾 저장 (삭제할 항목 선택)';
             } else if (mode === 'recommend') {
-                const n = checkedRecDeleteNames().length;
-                btn.disabled = n === 0;
-                btn.textContent = n > 0 ? `💾 저장 (삭제 ${n})` : '💾 저장 (삭제할 후보 선택)';
+                // 추천 탭은 즉시 담은 추가분 + 체크한 삭제 후보를 함께 저장한다.
+                const delN = checkedRecDeleteNames().length;
+                const addN = adds.length;
+                btn.disabled = (addN + delN) === 0;
+                const parts = [];
+                if (addN > 0) parts.push(`추가 ${addN}`);
+                if (delN > 0) parts.push(`삭제 ${delN}`);
+                btn.textContent = parts.length > 0
+                    ? `💾 저장 (${parts.join(' / ')})` : '💾 저장 (추가하거나 삭제할 항목 선택)';
             } else {
                 btn.disabled = true;
                 btn.textContent = '💾 저장 (추가/삭제 버튼으로 시작)';
@@ -581,12 +613,19 @@
                 return;
             }
             if (mode === 'recommend') {
-                // 성과 없는 관리 종목 삭제(기존 삭제 플로우 재사용 — 봇이 시트 기준 검증).
+                // 즉시 담은 추가분 + 성과 없는 관리 종목 삭제를 한 번에 전송
+                // (기존 추가/삭제 플로우 재사용 — 봇이 시트 기준 검증).
                 const names = checkedRecDeleteNames();
-                if (names.length === 0) { alert('삭제할 후보를 먼저 선택하세요(체크박스).'); return; }
-                if (!confirm(`선택한 ${names.length}개 항목을 관리 목록에서 삭제할까요?`)) return;
+                if (adds.length === 0 && names.length === 0) {
+                    alert('[추가] 버튼으로 담거나 삭제할 후보를 먼저 선택하세요.');
+                    return;
+                }
+                if (names.length > 0
+                    && !confirm(`선택한 ${names.length}개 항목을 관리 목록에서 삭제할까요?`)) {
+                    return;
+                }
                 tg.sendData(JSON.stringify({
-                    action: 'manage_items', adds: [], deletes: names,
+                    action: 'manage_items', adds: adds, deletes: names,
                 }));
                 return;
             }
