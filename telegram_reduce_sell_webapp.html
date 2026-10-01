@@ -47,25 +47,25 @@
 </head>
 <body>
     <h2>🔵 매도% 조정</h2>
-    <div class="muted">종목을 고르거나 코드를 직접 넣고, 매도 활성화 수익률(%)을 입력하세요.
+    <div class="muted">매도 활성화 수익률(%)을 입력하고 종목을 고르세요.
         서비스가 떠 있는 동안만 적용되며 재시작하면 공용값으로 돌아갑니다.</div>
-
-    <div class="card">
-        <div class="label">관리 중인 국장 종목</div>
-        <ul id="item-list"></ul>
-    </div>
-
-    <div class="card">
-        <div class="label">종목코드(ISCD) 직접 입력 — 목록에 없는 종목용</div>
-        <input id="iscd" type="text" inputmode="text" maxlength="6" placeholder="예: 005930" autocomplete="off">
-        <div class="hint">직접 입력하면 위 목록 선택은 해제됩니다.</div>
-        <div class="selected" id="selected"></div>
-    </div>
 
     <div class="card">
         <div class="label">매도 활성화 수익률(%)</div>
         <input id="pct" type="text" inputmode="decimal" placeholder="예: 4.3" autocomplete="off">
         <div class="hint">평단 대비 이 수익률부터 매도 감시를 시작합니다(0보다 크고 100 미만).</div>
+    </div>
+
+    <div class="card">
+        <div class="label">관리 중인 국장 종목</div>
+        <ul id="item-list"></ul>
+        <div class="selected" id="selected"></div>
+    </div>
+
+    <div class="card">
+        <div class="label">종목코드(ISCD) 직접 입력 — 목록에 없는 종목일 때만</div>
+        <input id="iscd" type="text" inputmode="text" maxlength="6" placeholder="예: 005930" autocomplete="off">
+        <div class="hint">직접 입력하면 위 목록 선택은 해제됩니다.</div>
     </div>
 
     <button id="submit">확인 — 전 인스턴스에 적용</button>
@@ -119,7 +119,7 @@
             if (rows.length === 0) {
                 const li = document.createElement("li");
                 li.className = "empty";
-                li.textContent = "관리 중인 국장 종목이 없습니다. 아래에 코드를 직접 입력하세요.";
+                li.textContent = "관리 중인 국장 종목이 없습니다. 아래 종목코드를 직접 입력하세요.";
                 listEl.appendChild(li);
                 return;
             }
