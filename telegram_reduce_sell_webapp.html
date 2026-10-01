@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>매도% 조정</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
+        h2 { margin: 0 0 6px; }
+        .muted { color: #697789; font-size: 13px; margin-bottom: 12px; }
+        .card { background: #fff; border: 1px solid #d9e0e8; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+        .label { font-size: 13px; font-weight: 700; color: #4a5a6d; margin-bottom: 6px; }
+
+        ul { list-style: none; padding: 0; margin: 0; max-height: 38vh; overflow: auto; }
+        li { padding: 12px 10px; border-bottom: 1px solid #edf1f5; cursor: pointer; }
+        li:last-child { border-bottom: none; }
+        li.active { background: #eaf4ff; }
+        .name { font-weight: 700; }
+        .meta { font-size: 12px; color: #617184; margin-top: 3px; }
+        .empty { padding: 14px 10px; color: #8494a6; font-size: 14px; }
+
+        input {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #ccd6e2;
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 16px;
+        }
+        input:focus { outline: none; border-color: #7db4e8; }
+        .hint { font-size: 12px; color: #8494a6; margin-top: 6px; }
+        .selected { font-size: 13px; color: #14538f; margin-top: 8px; min-height: 16px; }
+
+        #submit {
+            width: 100%;
+            border: none;
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(120deg, #1257a0, #2f7fd1);
+        }
+        .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <h2>🔵 매도% 조정</h2>
+    <div class="muted">종목을 고르거나 코드를 직접 넣고, 매도 활성화 수익률(%)을 입력하세요.
+        서비스가 떠 있는 동안만 적용되며 재시작하면 공용값으로 돌아갑니다.</div>
+
+    <div class="card">
+        <div class="label">관리 중인 국장 종목</div>
+        <ul id="item-list"></ul>
+    </div>
+
+    <div class="card">
+        <div class="label">종목코드(ISCD) 직접 입력 — 목록에 없는 종목용</div>
+        <input id="iscd" type="text" inputmode="text" maxlength="6" placeholder="예: 005930" autocomplete="off">
+        <div class="hint">직접 입력하면 위 목록 선택은 해제됩니다.</div>
+        <div class="selected" id="selected"></div>
+    </div>
+
+    <div class="card">
+        <div class="label">매도 활성화 수익률(%)</div>
+        <input id="pct" type="text" inputmode="decimal" placeholder="예: 4.3" autocomplete="off">
+        <div class="hint">평단 대비 이 수익률부터 매도 감시를 시작합니다(0보다 크고 100 미만).</div>
+    </div>
+
+    <button id="submit">확인 — 전 인스턴스에 적용</button>
+    <div class="warn" id="warn"></div>
+
+    <script>
+        // 텔레그램 밖(일반 브라우저)에서 열어도 입력 검증은 동작하도록 스텁으로 대체한다.
+        const tg = (window.Telegram && window.Telegram.WebApp) || {
+            ready() {}, expand() {},
+            sendData(data) { document.getElementById("warn").textContent = "텔레그램 밖에서 열려 전송하지 않았습니다: " + data; },
+        };
+        tg.ready();
+        tg.expand();
+
+        let rows = [];          // [{iscd, name}] — 봇이 실은 국장 관리 항목
+        let selected = null;
+
+        const iscdEl = document.getElementById("iscd");
+        const pctEl = document.getElementById("pct");
+        const warnEl = document.getElementById("warn");
+        const selectedEl = document.getElementById("selected");
+
+        // 봇이 실은 ?data= 페이로드 복원(services/webapp_payload.py encode_payload와 대응).
+        async function decodePayload(raw) {
+            if (raw.startsWith('{')) return JSON.parse(raw);
+            const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return JSON.parse(await new Response(stream).text());
+        }
+
+        (async function loadRows() {
+            try {
+                const raw = new URLSearchParams(window.location.search).get("data");
+                if (!raw) return;
+                const parsed = await decodePayload(raw);
+                if (parsed && parsed.action === "reduce_sell_form" && Array.isArray(parsed.rows)) {
+                    rows = parsed.rows;
+                }
+            } catch (e) {
+                warnEl.textContent = "종목 목록을 읽지 못했습니다: " + e;
+            }
+            renderList();
+        })();
+
+        function renderList() {
+            const listEl = document.getElementById("item-list");
+            listEl.innerHTML = "";
+            if (rows.length === 0) {
+                const li = document.createElement("li");
+                li.className = "empty";
+                li.textContent = "관리 중인 국장 종목이 없습니다. 아래에 코드를 직접 입력하세요.";
+                listEl.appendChild(li);
+                return;
+            }
+            rows.forEach(item => {
+                const li = document.createElement("li");
+                li.innerHTML = `<div class="name">${item.name || item.iscd}</div>` +
+                    `<div class="meta">${item.iscd}</div>`;
+                if (selected && selected.iscd === item.iscd) li.classList.add("active");
+                li.addEventListener("click", () => {
+                    selected = item;
+                    iscdEl.value = "";           // 목록 선택과 직접 입력은 둘 중 하나만
+                    selectedEl.textContent = "선택: " + (item.name || item.iscd) + " (" + item.iscd + ")";
+                    warnEl.textContent = "";
+                    renderList();
+                });
+                listEl.appendChild(li);
+            });
+        }
+
+        iscdEl.addEventListener("input", () => {
+            if (iscdEl.value.trim()) {
+                selected = null;
+                selectedEl.textContent = "";
+                renderList();
+            }
+        });
+
+        // 확인: 잘못된 값이면 에러만 보여주고 보내지 않는다(값을 고치거나 닫기).
+        document.getElementById("submit").addEventListener("click", () => {
+            warnEl.textContent = "";
+            const manual = iscdEl.value.trim().toUpperCase();
+            let iscd = "", name = "";
+            if (manual) {
+                if (!/^[0-9A-Z]{6}$/.test(manual)) {
+                    warnEl.textContent = "종목코드(ISCD)는 6자리여야 합니다: " + manual;
+                    return;
+                }
+                iscd = manual;
+            } else if (selected) {
+                iscd = selected.iscd;
+                name = selected.name || "";
+            } else {
+                warnEl.textContent = "목록에서 종목을 고르거나 종목코드를 입력하세요.";
+                return;
+            }
+
+            const pctText = pctEl.value.trim().replace(/%$/, "");
+            const pct = Number(pctText);
+            if (!pctText || !Number.isFinite(pct)) {
+                warnEl.textContent = "매도 활성화 수익률(%)을 숫자로 입력하세요.";
+                return;
+            }
+            if (!(pct > 0 && pct < 100)) {
+                warnEl.textContent = "매도 활성화 수익률은 0보다 크고 100 미만이어야 합니다: " + pctText;
+                return;
+            }
+
+            tg.sendData(JSON.stringify({ action: "reduce_sell_submit", iscd, name, pct }));
+        });
+    </script>
+</body>
+</html>
