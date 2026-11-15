@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>가상잔고</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
+        h2 { margin: 0 0 6px; }
+        .muted { color: #697789; font-size: 13px; margin-bottom: 12px; }
+        .card { background: #fff; border: 1px solid #d9e0e8; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+        .label { font-size: 13px; font-weight: 700; color: #4a5a6d; margin-bottom: 6px; }
+
+        .status-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 15px; border-bottom: 1px solid #edf1f5; }
+        .status-row:last-child { border-bottom: none; }
+        .status-row .key { color: #617184; }
+        .status-row .val { font-weight: 700; }
+        .real-cash { font-size: 13px; color: #617184; margin-top: 8px; }
+
+        .switch-row { display: flex; justify-content: space-between; align-items: center; }
+        .switch-row .title { font-size: 16px; font-weight: 700; }
+        .switch { position: relative; width: 52px; height: 30px; flex: none; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; inset: 0; background: #c3ccd7; border-radius: 30px; transition: .2s; }
+        .slider:before { content: ""; position: absolute; width: 24px; height: 24px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+        .switch input:checked + .slider { background: #2f7fd1; }
+        .switch input:checked + .slider:before { transform: translateX(22px); }
+
+        input[type=text] {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #ccd6e2;
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 16px;
+        }
+        input[type=text]:focus { outline: none; border-color: #7db4e8; }
+        .hint { font-size: 12px; color: #8494a6; margin-top: 6px; }
+        .preview { font-size: 13px; color: #14538f; margin-top: 8px; min-height: 16px; }
+
+        .check-row { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; }
+        .check-row input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; }
+
+        #submit {
+            width: 100%;
+            border: none;
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(120deg, #1257a0, #2f7fd1);
+        }
+        .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <h2>🪙 가상잔고</h2>
+    <div class="muted">자동 매수 투입 한도입니다. 값을 고르고 [적용]을 누르면 한 번에 반영됩니다.
+        실계좌 잔고와는 따로 관리됩니다.</div>
+
+    <div class="card">
+        <div class="label">현재 상태 <span id="as-of"></span></div>
+        <div class="status-row"><span class="key">사용</span><span class="val" id="cur-enabled">-</span></div>
+        <div class="status-row"><span class="key">설정 금액</span><span class="val" id="cur-target">-</span></div>
+        <div class="status-row"><span class="key">현재 가상 잔고</span><span class="val" id="cur-balance">-</span></div>
+        <div class="status-row"><span class="key">정산 대기</span><span class="val" id="cur-reserved">-</span></div>
+        <div class="real-cash" id="real-cash"></div>
+    </div>
+
+    <div class="card">
+        <div class="switch-row">
+            <span class="title">가상잔고 사용</span>
+            <label class="switch"><input id="enabled" type="checkbox"><span class="slider"></span></label>
+        </div>
+        <div class="hint">끄면 자동 매수가 실계좌 주문가능현금만 보고 삽니다.</div>
+    </div>
+
+    <div class="card">
+        <div class="label">설정 금액(원)</div>
+        <input id="target" type="text" inputmode="numeric" placeholder="예: 1000000 · 1,000,000 · 100만" autocomplete="off">
+        <div class="preview" id="preview"></div>
+    </div>
+
+    <div class="card">
+        <label class="check-row">
+            <input id="apply-balance" type="checkbox">
+            <span>현재 가상 잔고를 설정 금액으로 덮어쓰기
+                <div class="hint">정산 대기 매수는 그대로 두고, 안 사지면 나중에 더해 돌아옵니다.
+                    체크하지 않으면 설정 금액만 저장하고 잔고는 그대로입니다.</div>
+            </span>
+        </label>
+    </div>
+
+    <button id="submit">적용</button>
+    <div class="warn" id="warn"></div>
+
+    <script>
+        // 텔레그램 밖(일반 브라우저)에서 열어도 입력 검증은 동작하도록 스텁으로 대체한다.
+        const tg = (window.Telegram && window.Telegram.WebApp) || {
+            ready() {}, expand() {},
+            sendData(data) { document.getElementById("warn").textContent = "텔레그램 밖에서 열려 전송하지 않았습니다: " + data; },
+        };
+        tg.ready();
+        tg.expand();
+
+        const MAX_TARGET = 1000000000000;  // services/telegram_virtual_cash_flow.py MAX_TARGET과 같게
+        const enabledEl = document.getElementById("enabled");
+        const targetEl = document.getElementById("target");
+        const applyEl = document.getElementById("apply-balance");
+        const previewEl = document.getElementById("preview");
+        const warnEl = document.getElementById("warn");
+        let loaded = false;
+
+        const won = n => Number(n).toLocaleString("ko-KR") + "원";
+
+        // 봇이 실은 ?data= 페이로드 복원(services/webapp_payload.py encode_payload와 대응).
+        async function decodePayload(raw) {
+            if (raw.startsWith('{')) return JSON.parse(raw);
+            const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+            return JSON.parse(await new Response(stream).text());
+        }
+
+        // "1,000,000"·"1000000원"·"100만" → 원 단위 정수(무효면 null).
+        function parseAmount(text) {
+            const cleaned = (text || "").replace(/[,\s원]/g, "");
+            const m = cleaned.match(/^(\d+)(만)?$/);
+            if (!m) return null;
+            const value = Number(m[1]) * (m[2] ? 10000 : 1);
+            return Number.isSafeInteger(value) ? value : null;
+        }
+
+        function renderPreview() {
+            const raw = targetEl.value.trim();
+            const amount = parseAmount(raw);
+            previewEl.textContent = !raw ? "" : (amount === null ? "숫자로 입력하세요" : "= " + won(amount));
+        }
+
+        (async function load() {
+            try {
+                const raw = new URLSearchParams(window.location.search).get("data");
+                if (!raw) throw new Error("상태 데이터가 없습니다");
+                const p = await decodePayload(raw);
+                if (!p || p.action !== "virtual_cash_form") throw new Error("가상잔고 데이터가 아닙니다");
+                document.getElementById("as-of").textContent = p.as_of ? "(" + p.as_of + " 기준)" : "";
+                document.getElementById("cur-enabled").textContent = p.enabled ? "사용 중" : "미사용";
+                document.getElementById("cur-target").textContent = p.target > 0 ? won(p.target) : "미설정";
+                document.getElementById("cur-balance").textContent = won(p.balance || 0);
+                document.getElementById("cur-reserved").textContent =
+                    p.reserved_count ? won(p.reserved_total) + " (" + p.reserved_count + "건)" : "없음";
+                document.getElementById("real-cash").textContent = p.real_cash || "";
+                enabledEl.checked = !!p.enabled;
+                if (p.target > 0) targetEl.value = Number(p.target).toLocaleString("ko-KR");
+                renderPreview();
+                loaded = true;
+            } catch (e) {
+                warnEl.textContent = "현재 상태를 읽지 못했습니다(하단 버튼을 다시 눌러 여세요): " + e.message;
+            }
+        })();
+
+        targetEl.addEventListener("input", renderPreview);
+
+        // 적용: 잘못된 값이면 에러만 보여주고 보내지 않는다(값을 고치거나 닫기).
+        document.getElementById("submit").addEventListener("click", () => {
+            warnEl.textContent = "";
+            if (!loaded) {
+                warnEl.textContent = "현재 상태를 읽지 못해 적용할 수 없습니다. 하단 버튼을 다시 눌러 여세요.";
+                return;
+            }
+            const raw = targetEl.value.trim();
+            const target = raw ? parseAmount(raw) : 0;
+            if (target === null || target > MAX_TARGET) {
+                warnEl.textContent = "설정 금액을 올바른 숫자로 입력하세요: " + raw;
+                return;
+            }
+            if (applyEl.checked && target <= 0) {
+                warnEl.textContent = "잔고를 덮어쓰려면 설정 금액이 1원 이상이어야 합니다.";
+                return;
+            }
+            tg.sendData(JSON.stringify({
+                action: "virtual_cash_submit",
+                enabled: enabledEl.checked,
+                target,
+                apply_balance: applyEl.checked,
+            }));
+        });
+    </script>
+</body>
+</html>
