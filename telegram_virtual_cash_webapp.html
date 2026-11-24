@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>가상잔고</title>
+    <title>옵션</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
@@ -52,13 +52,15 @@
             color: #fff;
             background: linear-gradient(120deg, #1257a0, #2f7fd1);
         }
+        .section { font-size: 15px; font-weight: 700; color: #1c2430; margin: 18px 0 8px; }
         .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; margin-top: 8px; }
     </style>
 </head>
 <body>
-    <h2>🪙 가상잔고</h2>
-    <div class="muted">자동 매수 투입 한도입니다. 값을 고르고 [적용]을 누르면 한 번에 반영됩니다.
-        실계좌 잔고와는 따로 관리됩니다.</div>
+    <h2>⚙️ 옵션</h2>
+    <div class="muted">자동 매수 옵션입니다. 값을 고르고 [적용]을 누르면 한 번에 반영됩니다.</div>
+
+    <div class="section">🪙 가상잔고 <span class="hint">(자동 매수 투입 한도 · 실계좌 잔고와 따로 관리)</span></div>
 
     <div class="card">
         <div class="label">현재 상태 <span id="as-of"></span></div>
@@ -93,6 +95,26 @@
         </label>
     </div>
 
+    <div id="entry-section" style="display:none">
+        <div class="section">🛒 매수 제한</div>
+        <div class="card" id="lock-card" style="display:none">
+            <div class="switch-row">
+                <span class="title">🔒 계좌 매수 잠금(매도만 허용)</span>
+                <label class="switch"><input id="block-all-buy" type="checkbox"><span class="slider"></span></label>
+            </div>
+            <div class="hint">켜면 이 계좌는 자동·수동(텔레그램) 매수를 모두 하지 않고, 보유 종목의
+                자동·수동 매도만 합니다. 아래 0주 차단보다 우선합니다(재시작해도 유지).</div>
+        </div>
+        <div class="card">
+            <div class="switch-row">
+                <span class="title">보유 0주 종목 신규 매수 차단</span>
+                <label class="switch"><input id="block-new-entry" type="checkbox"><span class="slider"></span></label>
+            </div>
+            <div class="hint">켜면 보유가 없는 관리 종목은 자동 매수하지 않고, 이미 보유한 종목의
+                물타기·추가 매수만 합니다(가상잔고 사용 여부와 무관 · 재시작해도 유지).</div>
+        </div>
+    </div>
+
     <button id="submit">적용</button>
     <div class="warn" id="warn"></div>
 
@@ -109,6 +131,10 @@
         const enabledEl = document.getElementById("enabled");
         const targetEl = document.getElementById("target");
         const applyEl = document.getElementById("apply-balance");
+        const blockEl = document.getElementById("block-new-entry");
+        let hasBlockOption = false;
+        const lockEl = document.getElementById("block-all-buy");
+        let hasLockOption = false;
         const previewEl = document.getElementById("preview");
         const warnEl = document.getElementById("warn");
         let loaded = false;
@@ -146,7 +172,7 @@
                 const raw = new URLSearchParams(window.location.search).get("data");
                 if (!raw) throw new Error("상태 데이터가 없습니다");
                 const p = await decodePayload(raw);
-                if (!p || p.action !== "virtual_cash_form") throw new Error("가상잔고 데이터가 아닙니다");
+                if (!p || p.action !== "virtual_cash_form") throw new Error("옵션 데이터가 아닙니다");
                 document.getElementById("as-of").textContent = p.as_of ? "(" + p.as_of + " 기준)" : "";
                 document.getElementById("cur-enabled").textContent = p.enabled ? "사용 중" : "미사용";
                 document.getElementById("cur-target").textContent = p.target > 0 ? won(p.target) : "미설정";
@@ -155,6 +181,17 @@
                     p.reserved_count ? won(p.reserved_total) + " (" + p.reserved_count + "건)" : "없음";
                 document.getElementById("real-cash").textContent = p.real_cash || "";
                 enabledEl.checked = !!p.enabled;
+                // 옵션 저장소가 없는 인스턴스(구 버전 포함)는 필드가 없어 구역을 숨긴다.
+                if (typeof p.block_new_entry === "boolean") {
+                    hasBlockOption = true;
+                    blockEl.checked = p.block_new_entry;
+                    document.getElementById("entry-section").style.display = "";
+                }
+                if (typeof p.block_all_buy === "boolean") {
+                    hasLockOption = true;
+                    lockEl.checked = p.block_all_buy;
+                    document.getElementById("lock-card").style.display = "";
+                }
                 if (p.target > 0) targetEl.value = Number(p.target).toLocaleString("ko-KR");
                 renderPreview();
                 loaded = true;
@@ -182,12 +219,15 @@
                 warnEl.textContent = "잔고를 덮어쓰려면 설정 금액이 1원 이상이어야 합니다.";
                 return;
             }
-            tg.sendData(JSON.stringify({
+            const submitted = {
                 action: "virtual_cash_submit",
                 enabled: enabledEl.checked,
                 target,
                 apply_balance: applyEl.checked,
-            }));
+            };
+            if (hasBlockOption) submitted.block_new_entry = blockEl.checked;
+            if (hasLockOption) submitted.block_all_buy = lockEl.checked;
+            tg.sendData(JSON.stringify(submitted));
         });
     </script>
 </body>
