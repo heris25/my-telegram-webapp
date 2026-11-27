@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>매도% 조정</title>
+    <title>매도 조정</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 16px; background: #f6f8fb; color: #1c2430; }
@@ -42,18 +42,29 @@
             color: #fff;
             background: linear-gradient(120deg, #1257a0, #2f7fd1);
         }
+        #submit.danger { background: linear-gradient(120deg, #a01212, #d12f2f); }
         .warn { color: #9f2d2d; font-size: 13px; min-height: 18px; margin-top: 8px; }
+        .check { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; color: #9f2d2d; }
+        .check input { width: 22px; height: 22px; margin: 0; }
+        .disabled { opacity: 0.45; }
     </style>
 </head>
 <body>
-    <h2>🔵 매도% 조정</h2>
-    <div class="muted">매도 활성화 수익률(%)을 입력하고 종목을 고르세요.
-        서비스가 떠 있는 동안만 적용되며 재시작하면 공용값으로 돌아갑니다.</div>
+    <h2>🔵 매도 조정</h2>
+    <div class="muted">종목을 고르고 매도 활성화 수익률(%)을 입력하거나 "지금 당장 팔기"를 체크하세요.
+        수익률은 서비스가 떠 있는 동안만 적용되며 재시작하면 공용값으로 돌아갑니다.</div>
 
     <div class="card">
+        <label class="check"><input id="sell-now" type="checkbox"> 지금 당장 팔기</label>
+        <div class="hint" id="sell-now-hint">체크하면 <b>이 인스턴스에서만</b> 다음 시세가 오는 즉시 보유 전량을 매도합니다
+            (60초 안에 시세가 없으면 취소). 수익률 입력은 쓰지 않습니다.</div>
+    </div>
+
+    <div class="card" id="pct-card">
         <div class="label">매도 활성화 수익률(%)</div>
         <input id="pct" type="text" inputmode="decimal" placeholder="예: 4.3" autocomplete="off">
-        <div class="hint">평단 대비 이 수익률부터 매도 감시를 시작합니다(0보다 크고 100 미만).</div>
+        <div class="hint">평단 대비 이 수익률부터 매도 감시를 시작합니다(0보다 크고 100 미만).
+            전 인스턴스에 적용되며 메인 인스턴스에서만 가능합니다.</div>
     </div>
 
     <div class="card">
@@ -76,17 +87,33 @@
         const tg = (window.Telegram && window.Telegram.WebApp) || {
             ready() {}, expand() {},
             sendData(data) { document.getElementById("warn").textContent = "텔레그램 밖에서 열려 전송하지 않았습니다: " + data; },
+            showConfirm(message, callback) { callback(window.confirm(message)); },
         };
         tg.ready();
         tg.expand();
 
         let rows = [];          // [{iscd, name}] — 봇이 실은 국장 관리 항목
         let selected = null;
+        let canBroadcast = true;  // 메인 인스턴스 여부(매도% 전 인스턴스 적용 가능)
+        let canSellNow = true;    // 이 인스턴스 자동 매도 활성 여부(지금 당장 팔기 가능)
 
         const iscdEl = document.getElementById("iscd");
         const pctEl = document.getElementById("pct");
         const warnEl = document.getElementById("warn");
         const selectedEl = document.getElementById("selected");
+        const sellNowEl = document.getElementById("sell-now");
+        const submitEl = document.getElementById("submit");
+
+        // 체크 상태에 따라 수익률 입력칸과 확인 버튼 문구를 바꾼다.
+        function applyMode() {
+            const sellNow = sellNowEl.checked;
+            pctEl.disabled = sellNow;
+            document.getElementById("pct-card").classList.toggle("disabled", sellNow);
+            submitEl.classList.toggle("danger", sellNow);
+            submitEl.textContent = sellNow ? "확인 — 이 인스턴스에서 지금 팔기" : "확인 — 전 인스턴스에 적용";
+            warnEl.textContent = "";
+        }
+        sellNowEl.addEventListener("change", applyMode);
 
         // 봇이 실은 ?data= 페이로드 복원(services/webapp_payload.py encode_payload와 대응).
         async function decodePayload(raw) {
@@ -106,6 +133,14 @@
                 const parsed = await decodePayload(raw);
                 if (parsed && parsed.action === "reduce_sell_form" && Array.isArray(parsed.rows)) {
                     rows = parsed.rows;
+                    // 구버전 봇은 두 키가 없다 — 없으면 기존 동작(적용 가능)으로 둔다.
+                    if (parsed.can_broadcast === false) canBroadcast = false;
+                    if (parsed.can_sell_now === false) {
+                        canSellNow = false;
+                        sellNowEl.disabled = true;
+                        document.getElementById("sell-now-hint").textContent =
+                            "이 인스턴스는 자동 매도가 꺼져 있어 지금 당장 팔기를 쓸 수 없습니다.";
+                    }
                 }
             } catch (e) {
                 warnEl.textContent = "종목 목록을 읽지 못했습니다: " + e;
@@ -163,6 +198,23 @@
                 name = selected.name || "";
             } else {
                 warnEl.textContent = "목록에서 종목을 고르거나 종목코드를 입력하세요.";
+                return;
+            }
+
+            if (sellNowEl.checked) {
+                if (!canSellNow) {
+                    warnEl.textContent = "이 인스턴스는 지금 당장 팔기를 쓸 수 없습니다.";
+                    return;
+                }
+                const label = (name || iscd) + " (" + iscd + ")";
+                tg.showConfirm(label + " 보유 전량을 지금 팔까요?\n(이 인스턴스만 · 다음 시세에 지정가 매도)", ok => {
+                    if (ok) tg.sendData(JSON.stringify({ action: "reduce_sell_submit", iscd, name, sell_now: true }));
+                });
+                return;
+            }
+
+            if (!canBroadcast) {
+                warnEl.textContent = "매도% 전 인스턴스 적용은 메인 인스턴스에서만 가능합니다. 메인 봇에서 여세요.";
                 return;
             }
 
